@@ -10,8 +10,9 @@ services:
       - mongo
     env_file:
       - .env
+    restart: on-failure
     volumes:
-      - ./backend/app:/app   # Live code reload
+      - ./backend/app:/code/app # Live code reload
 
   postgres:
     image: postgres:16-alpine
