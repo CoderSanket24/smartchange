@@ -4,17 +4,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
 from app.database import Base, engine
-from app.routers import auth
+from app.routers import auth, wallet
 
-# Import models so SQLAlchemy registers them for table creation
-import app.models.user  # noqa: F401
+# Import ALL models so SQLAlchemy registers them for table creation
+import app.models.user    # noqa: F401
+import app.models.wallet  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="SmartChange API",
     description="AI-Driven Virtual Micro-Investment Platform for Students",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # CORS – allow all origins for development
@@ -29,6 +30,9 @@ app.add_middleware(
 # Phase 1 – Authentication
 app.include_router(auth.router)
 
+# Phase 2 – Virtual Wallet
+app.include_router(wallet.router)
+
 
 @app.on_event("startup")
 def startup_db():
@@ -40,11 +44,10 @@ def startup_db():
             logger.info("✅ Database tables created successfully.")
             return
         except OperationalError as e:
-            wait = 2 ** attempt  # exponential back-off: 1s, 2s, 4s, 8s…
-            logger.warning(f"⏳ DB not ready (attempt {attempt + 1}/{retries}), retrying in {wait}s… {e}")
+            wait = 2 ** attempt
+            logger.warning(f"⏳ DB not ready (attempt {attempt + 1}/{retries}), retrying in {wait}s…")
             time.sleep(wait)
-
-    raise RuntimeError("❌ Could not connect to the database after multiple retries.")
+    raise RuntimeError("❌ Could not connect to database after multiple retries.")
 
 
 @app.get("/", tags=["Health"])
