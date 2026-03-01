@@ -13,3 +13,6 @@ dist/
 
 # Docker
 *.db
+
+# AI Models
+backend/app/ai/models/*
