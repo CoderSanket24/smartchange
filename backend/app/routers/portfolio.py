@@ -15,14 +15,14 @@ router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 # In production, replace with a real market data API (e.g. yfinance, Alpha Vantage)
 # ---------------------------------------------------------------------------
 STOCK_UNIVERSE = {
-    "RELIANCE":  {"name": "Reliance Industries",    "price": 2950.0},
-    "TCS":       {"name": "Tata Consultancy Svcs",  "price": 3820.0},
-    "INFY":      {"name": "Infosys",                "price": 1780.0},
-    "HDFC":      {"name": "HDFC Bank",              "price": 1620.0},
-    "WIPRO":     {"name": "Wipro",                  "price": 480.0},
-    "ITC":       {"name": "ITC Limited",            "price": 440.0},
-    "TATASTEEL": {"name": "Tata Steel",             "price": 145.0},
-    "AXISBANK":  {"name": "Axis Bank",              "price": 1100.0},
+    "RELIANCE":  {"name": "Reliance Industries",   "sector": "Energy",   "price": 2950.0},
+    "TCS":       {"name": "Tata Consultancy Svcs", "sector": "IT",       "price": 3820.0},
+    "INFY":      {"name": "Infosys",               "sector": "IT",       "price": 1780.0},
+    "HDFC":      {"name": "HDFC Bank",             "sector": "Finance",  "price": 1620.0},
+    "WIPRO":     {"name": "Wipro",                 "sector": "IT",       "price": 480.0},
+    "ITC":       {"name": "ITC Limited",           "sector": "FMCG",    "price": 440.0},
+    "TATASTEEL": {"name": "Tata Steel",            "sector": "Metals",  "price": 145.0},
+    "AXISBANK":  {"name": "Axis Bank",             "sector": "Finance",  "price": 1100.0},
 }
 
 def _get_current_price(symbol: str) -> float:
