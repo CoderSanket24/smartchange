@@ -1,25 +1,24 @@
 import { Stack, router } from "expo-router";
 import { useEffect } from "react";
 import { AuthProvider, useAuth } from "../context/AuthContext";
+import { ThemeProvider, useTheme } from "../context/ThemeContext";
 import { ActivityIndicator, View } from "react-native";
 
 function RootNavigator() {
   const { user, loading } = useAuth();
+  const { theme } = useTheme();
 
   useEffect(() => {
     if (!loading) {
-      if (user) {
-        router.replace("/(tabs)");
-      } else {
-        router.replace("/auth/login");
-      }
+      if (user) { router.replace("/(tabs)"); }
+      else { router.replace("/auth/login"); }
     }
   }, [user, loading]);
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0A0E1A" }}>
-        <ActivityIndicator size="large" color="#00D4FF" />
+      <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: theme.bg }}>
+        <ActivityIndicator size="large" color={theme.accent} />
       </View>
     );
   }
@@ -35,8 +34,10 @@ function RootNavigator() {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <RootNavigator />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <RootNavigator />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

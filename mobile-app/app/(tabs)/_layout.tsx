@@ -1,16 +1,26 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { View, StyleSheet } from "react-native";
+import { TouchableOpacity, View } from "react-native";
+import { useTheme } from "../../context/ThemeContext";
 
 export default function TabLayout() {
+    const { theme, isDark, toggle } = useTheme();
+
     return (
         <Tabs
             screenOptions={({ route }) => ({
                 headerShown: false,
-                tabBarStyle: styles.tabBar,
-                tabBarActiveTintColor: "#00D4FF",
-                tabBarInactiveTintColor: "#4A5568",
-                tabBarLabelStyle: styles.label,
+                tabBarStyle: {
+                    backgroundColor: theme.tabBar,
+                    borderTopColor: theme.tabBorder,
+                    borderTopWidth: 1,
+                    height: 65,
+                    paddingBottom: 8,
+                    paddingTop: 8,
+                },
+                tabBarActiveTintColor: theme.accent,
+                tabBarInactiveTintColor: theme.muted,
+                tabBarLabelStyle: { fontSize: 11, fontWeight: "600", letterSpacing: 0.3 },
                 tabBarIcon: ({ color, size, focused }) => {
                     const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
                         index: focused ? "home" : "home-outline",
@@ -19,7 +29,10 @@ export default function TabLayout() {
                         ai: focused ? "sparkles" : "sparkles-outline",
                     };
                     return (
-                        <View style={[styles.iconWrapper, focused && styles.iconActive]}>
+                        <View style={{
+                            padding: 4, borderRadius: 10,
+                            backgroundColor: focused ? `${theme.accent}20` : "transparent",
+                        }}>
                             <Ionicons name={icons[route.name] ?? "ellipse"} size={size} color={color} />
                         </View>
                     );
@@ -33,26 +46,3 @@ export default function TabLayout() {
         </Tabs>
     );
 }
-
-const styles = StyleSheet.create({
-    tabBar: {
-        backgroundColor: "#0D1117",
-        borderTopColor: "#1A2332",
-        borderTopWidth: 1,
-        height: 65,
-        paddingBottom: 8,
-        paddingTop: 8,
-    },
-    label: {
-        fontSize: 11,
-        fontWeight: "600",
-        letterSpacing: 0.3,
-    },
-    iconWrapper: {
-        padding: 4,
-        borderRadius: 10,
-    },
-    iconActive: {
-        backgroundColor: "rgba(0, 212, 255, 0.12)",
-    },
-});
