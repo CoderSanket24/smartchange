@@ -14,11 +14,17 @@ interface Recommendation {
     current_price: number;
     allocation_pct: number;
     suggested_amount: number;
+    policy_weight?: number;      // PPO normalised portfolio weight (renamed from q_value)
     rationale: string;
     explanation: {
-        feature_scores: Record<string, number>;
-        shap_values: Record<string, number>;
-        top_factor: string;
+        // Heuristic / equal-weight fields
+        feature_scores?: Record<string, number>;
+        shap_values?: Record<string, number>;
+        top_factor?: string;
+        // PPO fields
+        method?: string;
+        policy_weight?: number;
+        note?: string;
     };
 }
 
@@ -125,10 +131,10 @@ export default function AIScreen() {
                 <View style={styles.loadingBox}><ActivityIndicator size="large" color="#F59E0B" /></View>
             ) : recs.map((rec) => {
                 const isExpanded = expanded === rec.stock_symbol;
-                const topFactor = rec.explanation.top_factor;
-                const topColor = FEATURE_COLORS[topFactor] ?? "#FFFFFF";
-                const shapVals = rec.explanation.shap_values;
-                const maxShap = Math.max(...Object.values(shapVals));
+                const topFactor = rec.explanation?.top_factor ?? null;
+                const topColor = topFactor ? (FEATURE_COLORS[topFactor] ?? "#00D4FF") : "#00D4FF";
+                const shapVals = rec.explanation?.shap_values ?? null;
+                const maxShap = shapVals ? Math.max(...Object.values(shapVals)) : 0;
 
                 return (
                     <View key={rec.stock_symbol} style={styles.recCard}>
@@ -149,40 +155,57 @@ export default function AIScreen() {
                             </View>
                         </View>
 
-                        {/* Top Factor Badge */}
-                        <View style={[styles.topFactorRow, { backgroundColor: `${topColor}15`, borderColor: `${topColor}30` }]}>
-                            <Ionicons name={FEATURE_ICONS[topFactor]} size={13} color={topColor} />
-                            <Text style={[styles.topFactorText, { color: topColor }]}>Top factor: {topFactor.replace("_", " ")}</Text>
-                        </View>
+                        {/* Top Factor Badge — only shown for heuristic recommendations */}
+                        {topFactor && (
+                            <View style={[styles.topFactorRow, { backgroundColor: `${topColor}15`, borderColor: `${topColor}30` }]}>
+                                <Ionicons name={FEATURE_ICONS[topFactor] ?? "analytics-outline"} size={13} color={topColor} />
+                                <Text style={[styles.topFactorText, { color: topColor }]}>Top factor: {topFactor.replace("_", " ")}</Text>
+                            </View>
+                        )}
+
+                        {/* PPO mode info badge */}
+                        {!topFactor && rec.explanation?.method && (
+                            <View style={[styles.topFactorRow, { backgroundColor: "rgba(0,212,255,0.08)", borderColor: "rgba(0,212,255,0.2)" }]}>
+                                <Ionicons name="sparkles-outline" size={13} color="#00D4FF" />
+                                <Text style={[styles.topFactorText, { color: "#00D4FF" }]}>PPO RL · weight: {rec.policy_weight?.toFixed(4)}</Text>
+                            </View>
+                        )}
 
                         {/* Rationale */}
                         <Text style={styles.rationale}>{rec.rationale}</Text>
 
-                        {/* Expand/collapse SHAP */}
-                        <TouchableOpacity style={styles.expandBtn} onPress={() => setExpanded(isExpanded ? null : rec.stock_symbol)}>
-                            <Text style={styles.expandText}>{isExpanded ? "Hide" : "View"} SHAP Explanation</Text>
-                            <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color="#F59E0B" />
-                        </TouchableOpacity>
-
-                        {isExpanded && (
-                            <View style={styles.shapBox}>
-                                <Text style={styles.shapTitle}>Feature Importance (SHAP)</Text>
-                                {Object.entries(shapVals).sort((a, b) => b[1] - a[1]).map(([feat, val]) => {
-                                    const color = FEATURE_COLORS[feat] ?? "#FFFFFF";
-                                    const pct = maxShap > 0 ? (val / maxShap) * 100 : 0;
-                                    return (
-                                        <View key={feat} style={styles.shapRow}>
-                                            <Ionicons name={FEATURE_ICONS[feat]} size={13} color={color} style={{ width: 20 }} />
-                                            <Text style={styles.shapFeat}>{feat.replace("_", " ")}</Text>
-                                            <View style={styles.shapBar}>
-                                                <View style={[styles.shapFill, { width: `${pct}%`, backgroundColor: color }]} />
-                                            </View>
-                                            <Text style={[styles.shapVal, { color }]}>{val.toFixed(4)}</Text>
-                                        </View>
-                                    );
-                                })}
-                                <Text style={styles.shapNote}>Higher SHAP value = stronger influence on recommendation</Text>
-                            </View>
+                        {/* Expand/collapse SHAP — only if shap_values exist */}
+                        {shapVals ? (
+                            <>
+                                <TouchableOpacity style={styles.expandBtn} onPress={() => setExpanded(isExpanded ? null : rec.stock_symbol)}>
+                                    <Text style={styles.expandText}>{isExpanded ? "Hide" : "View"} SHAP Explanation</Text>
+                                    <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color="#F59E0B" />
+                                </TouchableOpacity>
+                                {isExpanded && (
+                                    <View style={styles.shapBox}>
+                                        <Text style={styles.shapTitle}>Feature Importance (SHAP)</Text>
+                                        {Object.entries(shapVals).sort((a, b) => b[1] - a[1]).map(([feat, val]) => {
+                                            const color = FEATURE_COLORS[feat] ?? "#FFFFFF";
+                                            const pct = maxShap > 0 ? (val / maxShap) * 100 : 0;
+                                            return (
+                                                <View key={feat} style={styles.shapRow}>
+                                                    <Ionicons name={FEATURE_ICONS[feat] ?? "analytics-outline"} size={13} color={color} style={{ width: 20 }} />
+                                                    <Text style={styles.shapFeat}>{feat.replace("_", " ")}</Text>
+                                                    <View style={styles.shapBar}>
+                                                        <View style={[styles.shapFill, { width: `${pct}%`, backgroundColor: color }]} />
+                                                    </View>
+                                                    <Text style={[styles.shapVal, { color }]}>{val.toFixed(4)}</Text>
+                                                </View>
+                                            );
+                                        })}
+                                        <Text style={styles.shapNote}>Higher SHAP value = stronger influence on recommendation</Text>
+                                    </View>
+                                )}
+                            </>
+                        ) : (
+                            rec.explanation?.note ? (
+                                <Text style={styles.shapNote}>{rec.explanation.note}</Text>
+                            ) : null
                         )}
                     </View>
                 );
