@@ -21,27 +21,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from app.core.config import (
+    MODELS_DIR,
+    LIVE_PERIOD,
+    YFINANCE_TO_UNIVERSE,
+    UNIVERSE_TO_YFINANCE,
+)
+
 log = logging.getLogger(__name__)
 
-MODELS_DIR  = Path(__file__).parent / "models"
-MODEL_PATH  = MODELS_DIR / "ppo_smartchange.zip"
-VEC_PATH    = MODELS_DIR / "vecnormalize.pkl"
-META_PATH   = MODELS_DIR / "model_meta.json"
-LIVE_PERIOD = "90d"
+MODEL_PATH = MODELS_DIR / "ppo_smartchange.zip"
+VEC_PATH   = MODELS_DIR / "vecnormalize.pkl"
+META_PATH  = MODELS_DIR / "model_meta.json"
 
-# ── Symbol alias maps ─────────────────────────────────────────────────────────
-YFINANCE_TO_UNIVERSE: dict[str, str] = {
-    "HDFCBANK": "HDFC",
-    "RELIANCE": "RELIANCE",
-    "TCS":      "TCS",
-    "INFY":     "INFY",
-    "WIPRO":    "WIPRO",
-    "ITC":      "ITC",
-    "TATASTEEL":"TATASTEEL",
-    "AXISBANK": "AXISBANK",
-}
-# Reverse: STOCK_UNIVERSE key → yfinance base ticker
-UNIVERSE_TO_YFINANCE: dict[str, str] = {v: k for k, v in YFINANCE_TO_UNIVERSE.items()}
 
 # ── Lazy singletons ───────────────────────────────────────────────────────────
 _model        = None
@@ -240,8 +232,19 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
     else:
         weights = weights / w_sum
 
-    # ── Weights-sum validation ────────────────────────────────────────────────
+    # ── Weights-sum validation ────────────────────────────────────────────
     assert abs(weights.sum() - 1.0) < 1e-4, f"Weights sum to {weights.sum():.6f}, not 1."
+
+    # ── Over-concentration check ────────────────────────────────────────────
+    max_weight       = float(weights.max())
+    max_weight_sym   = symbols[int(weights.argmax())]
+    concentration_ok = max_weight <= 0.60
+    if not concentration_ok:
+        log.warning(
+            f"⚠️  PPO allocation concentration detected: "
+            f"{max_weight_sym} = {max_weight*100:.1f}% > 60%. "
+            f"Consider retraining with more timesteps or higher entropy coef."
+        )
 
     ranked_idx  = np.argsort(weights)[::-1][:top_n]
     top_weights = weights[ranked_idx]
@@ -293,8 +296,13 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
         "timesteps":           meta.get("timesteps", 0),
         "market_data_timestamp": timestamp,
         "portfolio_summary": {
-            "n_assets":        len(recs),
-            "sector_exposure": sector_exposure,
+            "n_assets":            len(recs),
+            "sector_exposure":     sector_exposure,
+            "max_allocation_pct":  round(max_weight * 100, 2),
+            "concentration_warning": (
+                f"{max_weight_sym} allocated {max_weight*100:.1f}% — exceeds 60% threshold."
+                if not concentration_ok else None
+            ),
         },
         "recommendations": recs,
     }

@@ -3,7 +3,7 @@ import * as SecureStore from "expo-secure-store";
 
 // Physical device (Expo Go): use your machine's LAN IP
 // Android emulator: use 10.0.2.2 instead
-export const BASE_URL = "http://172.168.0.207:8000";
+export const BASE_URL = "http://172.168.3.112:8000";
 
 export const API = axios.create({
   baseURL: BASE_URL,

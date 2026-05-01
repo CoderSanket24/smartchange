@@ -21,7 +21,9 @@ DO NOT import this file from FastAPI — training is offline only.
 import os
 import sys
 import json
+import random
 import logging
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,22 +38,30 @@ from stable_baselines3.common.callbacks import BaseCallback
 # Make sure app package is importable when run as a script
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from app.ai.rl_env import PortfolioEnv
-
-# ── Configuration ─────────────────────────────────────────────────────────────
-SYMBOLS = [
-    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
-    "WIPRO.NS",    "ITC.NS", "TATASTEEL.NS", "AXISBANK.NS",
-]
-PERIOD        = "2y"           # 2 years of daily OHLCV
-TRAIN_FRAC    = 0.75           # first 75% = train (≈18 months)
-TIMESTEPS     = 100_000
-MODELS_DIR    = Path(__file__).parent / "models"
-LOG_INTERVAL  = 1_000          # log every N timesteps
+from app.core.config import (
+    RL_SYMBOLS       as SYMBOLS,
+    DATA_PERIOD      as PERIOD,
+    TRAIN_FRAC,
+    TRAIN_TIMESTEPS  as TIMESTEPS,
+    MODELS_DIR,
+    LOG_INTERVAL,
+    PPO_LEARNING_RATE,
+    PPO_N_STEPS,
+    PPO_BATCH_SIZE,
+    PPO_N_EPOCHS,
+    PPO_GAMMA,
+    PPO_GAE_LAMBDA,
+    PPO_CLIP_RANGE,
+    PPO_ENT_COEF,
+    PPO_VF_COEF,
+    PPO_MAX_GRAD_NORM,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger(__name__)
 
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 
 # ── Reward Logger Callback ────────────────────────────────────────────────────
@@ -82,8 +92,10 @@ class RewardLogger(BaseCallback):
 
 # ── Data Download ─────────────────────────────────────────────────────────────
 def download_data() -> pd.DataFrame:
-    log.info("Downloading NSE data from yfinance …")
-    raw = yf.download(SYMBOLS, period=PERIOD, auto_adjust=True, progress=False)
+    # Append .NS suffix dynamically — SYMBOLS from config are plain names
+    tickers = [s if s.endswith(".NS") else f"{s}.NS" for s in SYMBOLS]
+    log.info(f"Downloading {len(tickers)} NSE stocks from yfinance …")
+    raw = yf.download(tickers, period=PERIOD, auto_adjust=True, progress=False)
     closes = raw["Close"].dropna(how="all").ffill()
     # Drop any stock with more than 10% missing rows
     missing_frac = closes.isna().mean()
@@ -95,16 +107,18 @@ def download_data() -> pd.DataFrame:
 
 
 # ── Train / Test Split ────────────────────────────────────────────────────────
-def split_data(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    cutoff_idx = int(len(df) * TRAIN_FRAC)
+def split_data(df: pd.DataFrame,
+               out_dir: Path = MODELS_DIR) -> tuple[pd.DataFrame, pd.DataFrame]:
+    cutoff_idx  = int(len(df) * TRAIN_FRAC)
     cutoff_date = df.index[cutoff_idx]
     train_df = df[df.index <  cutoff_date].copy()
     test_df  = df[df.index >= cutoff_date].copy()
     log.info(f"  Train: {train_df.index[0].date()} → {train_df.index[-1].date()} ({len(train_df)} days)")
     log.info(f"  Test : {test_df.index[0].date()} → {test_df.index[-1].date()} ({len(test_df)} days)")
     # Save split info so backtest can reproduce exact same split
+    out_dir.mkdir(parents=True, exist_ok=True)
     split_meta = {"cutoff_date": str(cutoff_date.date()), "n_train": len(train_df), "n_test": len(test_df)}
-    (MODELS_DIR / "split_meta.json").write_text(json.dumps(split_meta, indent=2))
+    (out_dir / "split_meta.json").write_text(json.dumps(split_meta, indent=2))
     return train_df, test_df
 
 
@@ -115,9 +129,24 @@ def make_env(price_df: pd.DataFrame):
     return _init
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
-def train(train_df: pd.DataFrame):
-    log.info("Building vectorised environment …")
+# ── Seed helper ────────────────────────────────────────────────────────────
+def set_seeds(seed: int) -> None:
+    """Fix numpy, Python, and PyTorch RNGs for reproducibility."""
+    import torch
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    log.info(f"  RNG seeds fixed to {seed}")
+
+
+# ── Training ───────────────────────────────────────────────────────────────
+def train(train_df: pd.DataFrame, seed: int = 42, out_dir: Path = MODELS_DIR):
+    """Train one PPO model. Returns (model, vec_env)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    log.info(f"Building vectorised environment (seed={seed}) …")
     vec_env = make_vec_env(make_env(train_df), n_envs=1)
     vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
@@ -125,56 +154,73 @@ def train(train_df: pd.DataFrame):
     model = PPO(
         "MlpPolicy",
         vec_env,
-        learning_rate   = 3e-4,
-        n_steps         = 2048,
-        batch_size      = 64,
-        n_epochs        = 10,
-        gamma           = 0.99,
-        gae_lambda      = 0.95,
-        clip_range      = 0.2,
-        ent_coef        = 0.01,
-        vf_coef         = 0.5,
-        max_grad_norm   = 0.5,
+        learning_rate   = PPO_LEARNING_RATE,
+        n_steps         = PPO_N_STEPS,
+        batch_size      = PPO_BATCH_SIZE,
+        n_epochs        = PPO_N_EPOCHS,
+        gamma           = PPO_GAMMA,
+        gae_lambda      = PPO_GAE_LAMBDA,
+        clip_range      = PPO_CLIP_RANGE,
+        ent_coef        = PPO_ENT_COEF,
+        vf_coef         = PPO_VF_COEF,
+        max_grad_norm   = PPO_MAX_GRAD_NORM,
+        seed            = seed,       # ← PPO internal seed
         verbose         = 0,
     )
 
-    reward_logger = RewardLogger(MODELS_DIR / "training_log.csv")
+    reward_logger = RewardLogger(out_dir / "training_log.csv")
 
     log.info(f"Training for {TIMESTEPS:,} timesteps …")
     model.learn(total_timesteps=TIMESTEPS, callback=reward_logger)
 
     # Save model + normalisation stats
-    model.save(str(MODELS_DIR / "ppo_smartchange"))
-    vec_env.save(str(MODELS_DIR / "vecnormalize.pkl"))
-    log.info(f"  Model saved → {MODELS_DIR / 'ppo_smartchange.zip'}")
-    log.info(f"  VecNormalize saved → {MODELS_DIR / 'vecnormalize.pkl'}")
+    model.save(str(out_dir / "ppo_smartchange"))
+    vec_env.save(str(out_dir / "vecnormalize.pkl"))
+    log.info(f"  Model → {out_dir / 'ppo_smartchange.zip'}")
+    log.info(f"  VecNorm → {out_dir / 'vecnormalize.pkl'}")
 
     return model, vec_env
 
 
-# ── Save Metadata ─────────────────────────────────────────────────────────────
-def save_meta(symbols: list[str], n_stocks: int):
+# ── Save Metadata ───────────────────────────────────────────────────────────────
+def save_meta(symbols: list[str], n_stocks: int,
+              seed: int = 42, out_dir: Path = MODELS_DIR) -> None:
     meta = {
         "trained_at":    datetime.now(tz=timezone.utc).isoformat(),
         "timesteps":     TIMESTEPS,
+        "seed":          seed,
         "symbols":       symbols,
         "n_stocks":      n_stocks,
         "train_frac":    TRAIN_FRAC,
         "roll_window":   PortfolioEnv.ROLL_WINDOW,
         "lambda":        PortfolioEnv.LAMBDA,
         "ppo_params": {
-            "lr": 3e-4, "n_steps": 2048, "batch_size": 64,
-            "n_epochs": 10, "gamma": 0.99
+            "lr":         PPO_LEARNING_RATE,
+            "n_steps":    PPO_N_STEPS,
+            "batch_size": PPO_BATCH_SIZE,
+            "n_epochs":   PPO_N_EPOCHS,
+            "gamma":      PPO_GAMMA,
         },
     }
-    (MODELS_DIR / "model_meta.json").write_text(json.dumps(meta, indent=2))
-    log.info(f"  Metadata saved → {MODELS_DIR / 'model_meta.json'}")
+    (out_dir / "model_meta.json").write_text(json.dumps(meta, indent=2))
+    log.info(f"  Metadata → {out_dir / 'model_meta.json'}")
 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    closes   = download_data()
-    train_df, _ = split_data(closes)
-    model, _    = train(train_df)
-    save_meta(list(closes.columns), closes.shape[1])
-    log.info("✅ Training complete.")
+    ap = argparse.ArgumentParser(description="Train SmartChange PPO agent")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="Random seed for reproducibility (default: 42)")
+    ap.add_argument("--out",  type=str, default=str(MODELS_DIR),
+                    help="Output directory for model artefacts (default: models/)")
+    args = ap.parse_args()
+
+    out_dir = Path(args.out)
+    set_seeds(args.seed)
+
+    closes      = download_data()
+    train_df, _ = split_data(closes, out_dir=out_dir)
+    model, _    = train(train_df, seed=args.seed, out_dir=out_dir)
+    save_meta(list(closes.columns), closes.shape[1],
+              seed=args.seed, out_dir=out_dir)
+    log.info(f"\u2705 Training complete (seed={args.seed}) → {out_dir}")

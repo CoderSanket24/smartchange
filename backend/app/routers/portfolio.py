@@ -15,14 +15,28 @@ router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 # In production, replace with a real market data API (e.g. yfinance, Alpha Vantage)
 # ---------------------------------------------------------------------------
 STOCK_UNIVERSE = {
-    "RELIANCE":  {"name": "Reliance Industries",   "sector": "Energy",   "price": 2950.0},
-    "TCS":       {"name": "Tata Consultancy Svcs", "sector": "IT",       "price": 3820.0},
-    "INFY":      {"name": "Infosys",               "sector": "IT",       "price": 1780.0},
-    "HDFC":      {"name": "HDFC Bank",             "sector": "Finance",  "price": 1620.0},
-    "WIPRO":     {"name": "Wipro",                 "sector": "IT",       "price": 480.0},
-    "ITC":       {"name": "ITC Limited",           "sector": "FMCG",    "price": 440.0},
-    "TATASTEEL": {"name": "Tata Steel",            "sector": "Metals",  "price": 145.0},
-    "AXISBANK":  {"name": "Axis Bank",             "sector": "Finance",  "price": 1100.0},
+    # ── Original 8 ────────────────────────────────────────────────────────────
+    "RELIANCE":   {"name": "Reliance Industries",        "sector": "Energy",            "price": 2950.0},
+    "TCS":        {"name": "Tata Consultancy Svcs",      "sector": "IT",                "price": 3820.0},
+    "INFY":       {"name": "Infosys",                    "sector": "IT",                "price": 1780.0},
+    "HDFC":       {"name": "HDFC Bank",                  "sector": "Banking",           "price": 1620.0},
+    "WIPRO":      {"name": "Wipro",                      "sector": "IT",                "price": 480.0},
+    "ITC":        {"name": "ITC Limited",                "sector": "FMCG",              "price": 440.0},
+    "TATASTEEL":  {"name": "Tata Steel",                 "sector": "Metals",            "price": 145.0},
+    "AXISBANK":   {"name": "Axis Bank",                  "sector": "Banking",           "price": 1100.0},
+    # ── 12 new additions ──────────────────────────────────────────────────────
+    "SBIN":       {"name": "State Bank of India",        "sector": "Banking",           "price": 760.0},
+    "ICICIBANK":  {"name": "ICICI Bank",                 "sector": "Banking",           "price": 1250.0},
+    "LT":         {"name": "Larsen & Toubro",            "sector": "Infrastructure",    "price": 3600.0},
+    "BAJFINANCE": {"name": "Bajaj Finance",              "sector": "NBFC",              "price": 7200.0},
+    "MARUTI":     {"name": "Maruti Suzuki",              "sector": "Auto",              "price": 12500.0},
+    "HINDUNILVR": {"name": "Hindustan Unilever",         "sector": "FMCG",              "price": 2400.0},
+    "ASIANPAINT": {"name": "Asian Paints",               "sector": "Consumer",          "price": 2800.0},
+    "TITAN":      {"name": "Titan Company",              "sector": "Consumer Durables", "price": 3500.0},
+    "ULTRACEMCO": {"name": "UltraTech Cement",           "sector": "Cement",            "price": 10800.0},
+    "KOTAKBANK":  {"name": "Kotak Mahindra Bank",        "sector": "Banking",           "price": 1950.0},
+    "BHARTIARTL": {"name": "Bharti Airtel",              "sector": "Telecom",           "price": 1700.0},
+    "ADANIENT":   {"name": "Adani Enterprises",          "sector": "Conglomerate",      "price": 2450.0},
 }
 
 def _get_current_price(symbol: str) -> float:
