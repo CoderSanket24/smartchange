@@ -44,6 +44,8 @@ export const portfolioApi = {
   stocks: () => API.get("/portfolio/stocks"),
   invest: (stock_symbol: string, amount: number) =>
     API.post("/portfolio/invest", { stock_symbol, amount }),
+  sell: (stock_symbol: string, shares: number) =>
+    API.post("/portfolio/sell", { stock_symbol, shares }),
   holdings: () => API.get("/portfolio/holdings"),
   performance: () => API.get("/portfolio/performance"),
 };

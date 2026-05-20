@@ -94,13 +94,14 @@ function MiniBarChart({ invested, current, theme }: { invested: number; current:
 
 // ── Stock Detail Bottom Sheet ──────────────────────────────────────────────────
 function StockDetailSheet({
-    holding, visible, onClose, theme, onInvestMore,
+    holding, visible, onClose, theme, onInvestMore, onSell,
 }: {
     holding: HoldingPerf | null;
     visible: boolean;
     onClose: () => void;
     theme: any;
     onInvestMore: (h: HoldingPerf) => void;
+    onSell: (h: HoldingPerf) => void;
 }) {
     const slideAnim = useRef(new Animated.Value(SCREEN_H)).current;
 
@@ -295,11 +296,11 @@ function StockDetailSheet({
                         <Text style={[detailStyles.actionBtnText, { color: theme.purple }]}>Invest More</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                        style={[detailStyles.actionBtn, { backgroundColor: theme.amber, flex: 1.4 }]}
-                        onPress={onClose}
+                        style={[detailStyles.actionBtn, { backgroundColor: `${theme.red}20`, borderColor: `${theme.red}40`, borderWidth: 1 }]}
+                        onPress={() => { onClose(); onSell(holding); }}
                     >
-                        <Ionicons name="close-circle-outline" size={16} color="#000" />
-                        <Text style={[detailStyles.actionBtnText, { color: "#000" }]}>Close</Text>
+                        <Ionicons name="trending-down-outline" size={16} color={theme.red} />
+                        <Text style={[detailStyles.actionBtnText, { color: theme.red }]}>Sell</Text>
                     </TouchableOpacity>
                 </View>
             </Animated.View>
@@ -394,6 +395,12 @@ export default function PortfolioScreen() {
     const [investAmount, setInvestAmount] = useState("");
     const [investing, setInvesting] = useState(false);
 
+    // Sell modal
+    const [sellModal, setSellModal] = useState(false);
+    const [sellHolding, setSellHolding] = useState<HoldingPerf | null>(null);
+    const [sellShares, setSellShares] = useState("");
+    const [selling, setSelling] = useState(false);
+
     // Detail sheet
     const [detailHolding, setDetailHolding] = useState<HoldingPerf | null>(null);
     const [detailVisible, setDetailVisible] = useState(false);
@@ -452,6 +459,33 @@ export default function PortfolioScreen() {
         } catch (e: any) {
             Alert.alert("Error", e?.response?.data?.detail ?? "Investment failed.");
         } finally { setInvesting(false); }
+    };
+
+    const openSellFor = (h: HoldingPerf) => {
+        setSellHolding(h);
+        setSellModal(true);
+    };
+
+    const handleSell = async () => {
+        const shares = parseFloat(sellShares);
+        if (!sellHolding || !shares || shares <= 0) return Alert.alert("Invalid", "Enter a valid number of shares.");
+        if (shares > sellHolding.shares) return Alert.alert("Insufficient Shares", `You own ${sellHolding.shares.toFixed(6)} shares.`);
+        setSelling(true);
+        try {
+            const res = await portfolioApi.sell(sellHolding.stock_symbol, shares);
+            setSellModal(false); setSellShares(""); setSellHolding(null);
+            fetchData(true);
+            const data = res.data;
+            Alert.alert(
+                "✅ Sold Successfully!",
+                `Sold ${data.shares_sold} shares of ${data.stock_symbol} at ₹${data.sale_price.toFixed(2)}\n\n` +
+                `Total Amount: ₹${data.total_amount.toFixed(2)}\n` +
+                `P&L: ${data.profit_loss >= 0 ? '+' : ''}₹${data.profit_loss.toFixed(2)}\n` +
+                `New Wallet Balance: ₹${data.wallet_balance.toFixed(2)}`
+            );
+        } catch (e: any) {
+            Alert.alert("Error", e?.response?.data?.detail ?? "Sale failed.");
+        } finally { setSelling(false); }
     };
 
     const s = makeStyles(theme);
@@ -582,6 +616,7 @@ export default function PortfolioScreen() {
                 onClose={closeDetail}
                 theme={theme}
                 onInvestMore={openInvestFor}
+                onSell={openSellFor}
             />
 
             {/* ── Invest Modal ── */}
@@ -643,6 +678,110 @@ export default function PortfolioScreen() {
                                     {investing
                                         ? <ActivityIndicator color="#fff" />
                                         : <Text style={s.modalBtnText}>Confirm Investment</Text>}
+                                </TouchableOpacity>
+                            </>
+                        )}
+                    </View>
+                </View>
+            </Modal>
+
+            {/* ── Sell Modal ── */}
+            <Modal visible={sellModal} transparent animationType="slide">
+                <View style={s.overlay}>
+                    <View style={s.modalCard}>
+                        <View style={s.modalHeader}>
+                            <Text style={s.modalTitle}>
+                                Sell {sellHolding?.stock_symbol}
+                            </Text>
+                            <TouchableOpacity onPress={() => { setSellModal(false); setSellHolding(null); setSellShares(""); }}>
+                                <Ionicons name="close" size={22} color={theme.muted} />
+                            </TouchableOpacity>
+                        </View>
+
+                        {sellHolding && (
+                            <>
+                                <View style={[s.summaryCard, { marginBottom: 16, padding: 16 }]}>
+                                    <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
+                                        <Text style={s.label}>Available Shares</Text>
+                                        <Text style={[s.stockName, { color: theme.text }]}>{sellHolding.shares.toFixed(6)}</Text>
+                                    </View>
+                                    <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
+                                        <Text style={s.label}>Current Price</Text>
+                                        <Text style={[s.stockName, { color: theme.green }]}>₹{sellHolding.current_price.toFixed(2)}</Text>
+                                    </View>
+                                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                                        <Text style={s.label}>Avg Buy Price</Text>
+                                        <Text style={[s.stockName, { color: theme.muted }]}>₹{sellHolding.avg_buy_price.toFixed(2)}</Text>
+                                    </View>
+                                </View>
+
+                                <Text style={s.label}>Number of Shares to Sell</Text>
+                                <TextInput
+                                    style={s.input}
+                                    placeholder="e.g. 0.5"
+                                    placeholderTextColor={theme.muted}
+                                    value={sellShares}
+                                    onChangeText={setSellShares}
+                                    keyboardType="decimal-pad"
+                                />
+                                
+                                <View style={{ flexDirection: "row", gap: 8, marginBottom: 16 }}>
+                                    <TouchableOpacity 
+                                        style={[s.quickBtn, { backgroundColor: `${theme.purple}15` }]}
+                                        onPress={() => setSellShares((sellHolding.shares * 0.25).toFixed(6))}
+                                    >
+                                        <Text style={[s.quickBtnText, { color: theme.purple }]}>25%</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[s.quickBtn, { backgroundColor: `${theme.purple}15` }]}
+                                        onPress={() => setSellShares((sellHolding.shares * 0.5).toFixed(6))}
+                                    >
+                                        <Text style={[s.quickBtnText, { color: theme.purple }]}>50%</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[s.quickBtn, { backgroundColor: `${theme.purple}15` }]}
+                                        onPress={() => setSellShares((sellHolding.shares * 0.75).toFixed(6))}
+                                    >
+                                        <Text style={[s.quickBtnText, { color: theme.purple }]}>75%</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity 
+                                        style={[s.quickBtn, { backgroundColor: `${theme.red}15` }]}
+                                        onPress={() => setSellShares(sellHolding.shares.toFixed(6))}
+                                    >
+                                        <Text style={[s.quickBtnText, { color: theme.red }]}>All</Text>
+                                    </TouchableOpacity>
+                                </View>
+
+                                {sellShares ? (
+                                    <View style={[s.summaryCard, { marginBottom: 16, padding: 16, backgroundColor: `${theme.red}10` }]}>
+                                        <Text style={[s.label, { marginBottom: 8 }]}>Sale Preview</Text>
+                                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
+                                            <Text style={s.stockPrice}>Sale Amount</Text>
+                                            <Text style={[s.stockName, { color: theme.text }]}>
+                                                ₹{(parseFloat(sellShares) * sellHolding.current_price).toFixed(2)}
+                                            </Text>
+                                        </View>
+                                        <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                                            <Text style={s.stockPrice}>Est. P&L</Text>
+                                            <Text style={[s.stockName, { 
+                                                color: (parseFloat(sellShares) * (sellHolding.current_price - sellHolding.avg_buy_price)) >= 0 
+                                                    ? theme.green : theme.red 
+                                            }]}>
+                                                {(parseFloat(sellShares) * (sellHolding.current_price - sellHolding.avg_buy_price)) >= 0 ? '+' : ''}
+                                                ₹{(parseFloat(sellShares) * (sellHolding.current_price - sellHolding.avg_buy_price)).toFixed(2)}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                ) : null}
+
+                                <TouchableOpacity 
+                                    style={[s.modalBtn, { backgroundColor: theme.red }]} 
+                                    onPress={handleSell} 
+                                    disabled={selling}
+                                >
+                                    {selling
+                                        ? <ActivityIndicator color="#fff" />
+                                        : <Text style={s.modalBtnText}>Confirm Sale</Text>}
                                 </TouchableOpacity>
                             </>
                         )}
@@ -714,6 +853,8 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
         sharesPreview: { color: t.muted, fontSize: 12, marginBottom: 16 },
         modalBtn: { backgroundColor: t.purple, borderRadius: 12, height: 52, justifyContent: "center", alignItems: "center", marginTop: 8 },
         modalBtnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+        quickBtn: { flex: 1, borderRadius: 8, paddingVertical: 8, alignItems: "center", justifyContent: "center" },
+        quickBtnText: { fontSize: 12, fontWeight: "700" },
 
         green: { color: "#22C55E" },
         red:   { color: "#EF4444" },

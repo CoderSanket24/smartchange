@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models.portfolio import Holding
 from app.models.wallet import Wallet
 from app.models.user import User
-from app.schemas.portfolio import InvestRequest, HoldingOut, HoldingPerformanceOut, PortfolioSummaryOut
+from app.schemas.portfolio import InvestRequest, HoldingOut, HoldingPerformanceOut, PortfolioSummaryOut, SellRequest, SellResponse
 from app.dependencies import get_current_user
 
 log = logging.getLogger(__name__)
@@ -207,6 +207,97 @@ def invest(
     db.commit()
     db.refresh(holding)
     return holding
+
+
+@router.post("/sell", response_model=SellResponse, status_code=status.HTTP_200_OK)
+def sell_stock(
+    payload: SellRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Sell shares of a stock and add proceeds to wallet.
+    Uses current live price for the sale.
+    """
+    symbol = payload.stock_symbol.upper()
+    
+    # Validate stock exists in universe
+    if symbol not in STOCK_UNIVERSE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Stock '{symbol}' not in virtual universe. Available: {list(STOCK_UNIVERSE.keys())}"
+        )
+    
+    # Check if user has this holding
+    holding = (
+        db.query(Holding)
+        .filter(Holding.user_id == current_user.id, Holding.stock_symbol == symbol)
+        .first()
+    )
+    
+    if not holding:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"You don't own any shares of {symbol}"
+        )
+    
+    # Check if user has enough shares
+    if holding.shares < payload.shares:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Insufficient shares. You own {holding.shares} shares but trying to sell {payload.shares}"
+        )
+    
+    # Get current live price
+    current_price = _get_live_price(symbol)
+    if current_price <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not fetch live price for {symbol}. Please try again shortly."
+        )
+    
+    # Calculate sale proceeds
+    total_amount = round(payload.shares * current_price, 2)
+    
+    # Calculate profit/loss for the shares being sold
+    cost_basis = round(payload.shares * holding.avg_buy_price, 2)
+    profit_loss = round(total_amount - cost_basis, 2)
+    
+    # Get wallet
+    wallet = db.query(Wallet).filter(Wallet.user_id == current_user.id).first()
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Wallet not found"
+        )
+    
+    # Update holding
+    remaining_shares = round(holding.shares - payload.shares, 6)
+    
+    if remaining_shares <= 0.000001:  # Essentially zero (accounting for floating point)
+        # Sold all shares, delete the holding
+        db.delete(holding)
+        remaining_shares = 0.0
+    else:
+        # Partial sale - update shares and invested amount proportionally
+        holding.shares = remaining_shares
+        holding.invested_amount = round(remaining_shares * holding.avg_buy_price, 2)
+    
+    # Add proceeds to wallet
+    wallet.balance = round(wallet.balance + total_amount, 2)
+    
+    db.commit()
+    
+    return SellResponse(
+        message=f"Successfully sold {payload.shares} shares of {symbol}",
+        stock_symbol=symbol,
+        shares_sold=payload.shares,
+        sale_price=current_price,
+        total_amount=total_amount,
+        profit_loss=profit_loss,
+        remaining_shares=remaining_shares,
+        wallet_balance=wallet.balance
+    )
 
 
 
