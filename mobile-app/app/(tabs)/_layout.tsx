@@ -1,10 +1,10 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { TouchableOpacity, View } from "react-native";
+import { View } from "react-native";
 import { useTheme } from "../../context/ThemeContext";
 
 export default function TabLayout() {
-    const { theme, isDark, toggle } = useTheme();
+    const { theme } = useTheme();
 
     return (
         <Tabs

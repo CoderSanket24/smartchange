@@ -1,3 +1,5 @@
+import time
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
@@ -7,6 +9,12 @@ from app.models.wallet import Wallet
 from app.models.user import User
 from app.schemas.portfolio import InvestRequest, HoldingOut, HoldingPerformanceOut, PortfolioSummaryOut
 from app.dependencies import get_current_user
+
+log = logging.getLogger(__name__)
+
+# ── In-memory price cache: symbol → (price, timestamp) ────────────────────────
+_PRICE_CACHE: dict = {}
+_CACHE_TTL   = 60   # seconds
 
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 
@@ -39,11 +47,42 @@ STOCK_UNIVERSE = {
     "ADANIENT":   {"name": "Adani Enterprises",          "sector": "Conglomerate",      "price": 2450.0},
 }
 
-def _get_current_price(symbol: str) -> float:
-    """Return mock current price (with ±3% simulated drift)."""
-    import random
-    base = STOCK_UNIVERSE[symbol]["price"]
-    return round(base * random.uniform(0.97, 1.03), 2)
+def _get_live_price(symbol: str) -> float:
+    """
+    Fetch live NSE price via yfinance with a 60-second in-memory TTL cache.
+    Handles the HDFC -> HDFCBANK.NS alias transparently.
+    Falls back to the static base price on any yfinance error.
+    """
+    global _PRICE_CACHE
+    now = time.time()
+    cached = _PRICE_CACHE.get(symbol)
+    if cached and (now - cached[1]) < _CACHE_TTL:
+        return cached[0]
+
+    # Resolve known alias: HDFC (portfolio key) -> HDFCBANK (NSE ticker)
+    _ALIAS: dict[str, str] = {"HDFC": "HDFCBANK"}
+    nse_base = _ALIAS.get(symbol, symbol)
+    ticker = f"{nse_base}.NS"
+
+    base_price = STOCK_UNIVERSE.get(symbol, {}).get("price", 0.0)
+    try:
+        import yfinance as yf
+        data = yf.download(ticker, period="2d", auto_adjust=True, progress=False)
+        if not data.empty and "Close" in data.columns:
+            close_val = data["Close"].iloc[-1]
+            # yfinance may return a Series when multi-level columns are present
+            if hasattr(close_val, "iloc"):
+                close_val = close_val.iloc[0]
+            price = round(float(close_val), 2)
+            _PRICE_CACHE[symbol] = (price, now)
+            return price
+    except Exception as exc:
+        log.warning(f"yfinance price fetch failed for {ticker}: {exc}")
+
+    # Fallback: use cached value (even stale) or static base
+    if cached:
+        return cached[0]
+    return base_price
 
 
 @router.get("/stocks", tags=["Portfolio"])
@@ -53,6 +92,46 @@ def list_available_stocks():
         {"symbol": sym, "name": info["name"], "price": info["price"]}
         for sym, info in STOCK_UNIVERSE.items()
     ]
+
+
+@router.get("/stocks/{symbol}/history", tags=["Portfolio"])
+def get_stock_history(symbol: str, period: str = "6mo", interval: str = "1d"):
+    """
+    Return OHLCV candlestick data for a given NSE symbol using yfinance.
+    No authentication required (used by the mobile chart WebView).
+    Returns list of {time, open, high, low, close} dicts.
+    """
+    _ALIAS: dict = {"HDFC": "HDFCBANK"}
+    clean = _ALIAS.get(symbol.upper(), symbol.upper())
+    ticker_sym = f"{clean}.NS"
+    try:
+        import yfinance as yf
+        df = yf.download(ticker_sym, period=period, interval=interval,
+                         auto_adjust=True, progress=False)
+        if df.empty:
+            raise HTTPException(status_code=404, detail=f"No data for {ticker_sym}")
+        # Flatten multi-level columns if present
+        if hasattr(df.columns, "levels"):
+            df.columns = df.columns.get_level_values(0)
+        candles = []
+        for ts, row in df.iterrows():
+            try:
+                candles.append({
+                    "time": int(ts.timestamp()),
+                    "open":  round(float(row["Open"]),  2),
+                    "high":  round(float(row["High"]),  2),
+                    "low":   round(float(row["Low"]),   2),
+                    "close": round(float(row["Close"]), 2),
+                })
+            except Exception:
+                continue
+        return {"symbol": symbol.upper(), "candles": candles}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error(f"History fetch failed for {ticker_sym}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch history: {exc}")
+
 
 
 @router.post("/invest", response_model=HoldingOut, status_code=status.HTTP_201_CREATED)
@@ -132,8 +211,8 @@ def get_performance(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Return full portfolio performance: current value, P&L per stock and overall.
-    Prices are simulated with ±3% drift around the base price.
+    Return full portfolio performance with live yfinance prices.
+    Falls back to static base prices if yfinance is unreachable.
     """
     holdings = db.query(Holding).filter(Holding.user_id == current_user.id).all()
 
@@ -148,24 +227,24 @@ def get_performance(
     total_current = 0.0
 
     for h in holdings:
-        curr_price = _get_current_price(h.stock_symbol)
-        curr_value = round(h.shares * curr_price, 2)
-        pl = round(curr_value - h.invested_amount, 2)
-        pl_pct = round((pl / h.invested_amount) * 100, 2) if h.invested_amount else 0
+        live_price = _get_live_price(h.stock_symbol)
+        curr_value  = round(h.shares * live_price, 2)
+        pl          = round(curr_value - h.invested_amount, 2)
+        pl_pct      = round((pl / h.invested_amount) * 100, 2) if h.invested_amount else 0
 
         perf_list.append(HoldingPerformanceOut(
             stock_symbol=h.stock_symbol,
             stock_name=h.stock_name,
             shares=h.shares,
             avg_buy_price=h.avg_buy_price,
-            current_price=curr_price,
+            current_price=live_price,
             invested_amount=h.invested_amount,
             current_value=curr_value,
             profit_loss=pl,
             profit_loss_pct=pl_pct
         ))
         total_invested += h.invested_amount
-        total_current += curr_value
+        total_current  += curr_value
 
     total_pl = round(total_current - total_invested, 2)
     total_pl_pct = round((total_pl / total_invested) * 100, 2) if total_invested else 0

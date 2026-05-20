@@ -1,14 +1,236 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
-    RefreshControl, ActivityIndicator,
+    RefreshControl, ActivityIndicator, TextInput,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { WebView } from "react-native-webview";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
 import { walletApi, portfolioApi } from "../../services/api";
 import { router } from "expo-router";
 
+// ── Stock chart — Lightweight Charts + backend yfinance endpoint ──────────────
+function StockChart({ symbol, height = 260 }: { symbol: string; height?: number }) {
+    const html = useMemo(() => {
+        const clean = symbol
+            .replace(/^(NSE:|BSE:)/i, "")
+            .replace(/\.(NS|BO)$/i, "")
+            .trim()
+            .toUpperCase();
+        const apiUrl = `http://172.168.3.112:8000/portfolio/stocks/${clean}/history`;
+
+        return `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body, html { background:#111827; overflow:hidden; font-family:sans-serif; }
+  #chart { width:100%; height:${height}px; }
+  .overlay { position:absolute; inset:0; display:flex; flex-direction:column;
+             align-items:center; justify-content:center; background:#111827; }
+  .msg { color:#9CA3AF; font-size:12px; margin-top:8px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#F59E0B;
+          animation:pulse 1s infinite alternate; }
+  @keyframes pulse { from{opacity:0.3} to{opacity:1} }
+  .sym { color:#F59E0B; font-size:13px; font-weight:700; margin-bottom:4px; }
+  .err { color:#EF4444; font-size:11px; text-align:center; padding:8px; }
+</style>
+</head><body>
+<div id="wrapper" style="position:relative;width:100%;height:${height}px">
+  <div id="chart"></div>
+  <div class="overlay" id="overlay">
+    <div class="sym">${clean}</div>
+    <div class="dot"></div>
+    <div class="msg">Loading chart…</div>
+  </div>
+</div>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"><\/script>
+<script>
+(function() {
+  var h = ${height};
+  fetch('${apiUrl}')
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      var candles = data.candles;
+      if (!candles || candles.length === 0) throw new Error('empty');
+      candles.sort(function(a,b){ return a.time - b.time; });
+      document.getElementById('overlay').style.display = 'none';
+      var chart = LightweightCharts.createChart(document.getElementById('chart'), {
+        width: window.innerWidth,
+        height: h,
+        layout: { background:{color:'#111827'}, textColor:'#9CA3AF' },
+        grid: { vertLines:{color:'#1F2937'}, horzLines:{color:'#1F2937'} },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor:'#374151' },
+        timeScale: { borderColor:'#374151', timeVisible:false },
+        handleScroll: false, handleScale: false,
+      });
+      var series = chart.addCandlestickSeries({
+        upColor:'#22C55E', downColor:'#EF4444',
+        borderVisible:false,
+        wickUpColor:'#22C55E', wickDownColor:'#EF4444',
+      });
+      series.setData(candles);
+      chart.timeScale().fitContent();
+    })
+    .catch(function(e) {
+      document.getElementById('overlay').innerHTML =
+        '<div class="err">Could not load chart.<br>Make sure the backend is running.</div>';
+    });
+})();
+<\/script>
+</body></html>`;
+    }, [symbol, height]);
+
+    return (
+        <View style={{ height, borderRadius: 14, overflow: "hidden", marginTop: 12 }}>
+            <WebView
+                source={{ html }}
+                style={{ flex: 1, backgroundColor: "#111827" }}
+                scrollEnabled={false}
+                javaScriptEnabled
+                domStorageEnabled
+                originWhitelist={["*"]}
+                mixedContentMode="always"
+            />
+        </View>
+    );
+}
+
+
+// ── Stock Chart Explorer ───────────────────────────────────────────────────────
+function StockChartExplorer({ theme }: { theme: any }) {
+    const [input, setInput] = useState("");
+    const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
+    const [chartKey, setChartKey] = useState(0);
+
+    const popularStocks = [
+        "RELIANCE", "TCS", "INFY", "HDFCBANK", "WIPRO",
+        "ICICIBANK", "SBIN", "BAJFINANCE", "ADANIENT", "TATAMOTORS",
+    ];
+
+    const handleSearch = () => {
+        const sym = input.trim().toUpperCase();
+        if (!sym) return;
+        setActiveSymbol(sym);
+        setChartKey(k => k + 1);
+    };
+
+    const handleQuickPick = (sym: string) => {
+        setInput(sym);
+        setActiveSymbol(sym);
+        setChartKey(k => k + 1);
+    };
+
+    return (
+        <View style={[s2.card, { borderColor: theme.border, backgroundColor: theme.card }]}>
+            {/* Section header */}
+            <View style={s2.sectionHeader}>
+                <View style={[s2.iconWrap, { backgroundColor: `${theme.amber}20` }]}>
+                    <Ionicons name="search-outline" size={16} color={theme.amber} />
+                </View>
+                <View>
+                    <Text style={[s2.cardTitle, { color: theme.text }]}>Stock Chart Explorer</Text>
+                    <Text style={[s2.cardSub, { color: theme.muted }]}>Search any NSE listed stock</Text>
+                </View>
+            </View>
+
+            {/* Search bar */}
+            <View style={s2.searchRow}>
+                <TextInput
+                    style={[s2.searchInput, { backgroundColor: theme.inputBg, borderColor: theme.border, color: theme.text }]}
+                    placeholder="e.g. RELIANCE, TCS, HDFCBANK…"
+                    placeholderTextColor={theme.muted}
+                    value={input}
+                    onChangeText={setInput}
+                    autoCapitalize="characters"
+                    returnKeyType="search"
+                    onSubmitEditing={handleSearch}
+                />
+                <TouchableOpacity
+                    style={[s2.searchBtn, { backgroundColor: theme.amber }]}
+                    onPress={handleSearch}
+                >
+                    <Ionicons name="bar-chart-outline" size={18} color="#000" />
+                </TouchableOpacity>
+            </View>
+
+            {/* Quick picks */}
+            <Text style={[s2.hintText, { color: theme.muted }]}>Popular stocks — tap to view chart</Text>
+            <View style={s2.pillsRow}>
+                {popularStocks.map(sym => (
+                    <TouchableOpacity
+                        key={sym}
+                        style={[
+                            s2.pill,
+                            { backgroundColor: theme.inputBg, borderColor: theme.border },
+                            activeSymbol === sym && { backgroundColor: `${theme.amber}25`, borderColor: `${theme.amber}60` },
+                        ]}
+                        onPress={() => handleQuickPick(sym)}
+                    >
+                        <Text style={[
+                            s2.pillText,
+                            { color: theme.subtext },
+                            activeSymbol === sym && { color: theme.amber },
+                        ]}>{sym}</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
+
+            {/* Stock chart */}
+            {activeSymbol && (
+                <>
+                    <View style={s2.chartHeader}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            <View style={[s2.liveDot, { backgroundColor: "#22C55E" }]} />
+                            <Text style={[s2.chartSymbolText, { color: theme.text }]}>NSE:{activeSymbol}</Text>
+                        </View>
+                        <TouchableOpacity
+                            style={s2.clearBtn}
+                            onPress={() => { setActiveSymbol(null); setInput(""); }}
+                        >
+                            <Ionicons name="close-circle-outline" size={15} color={theme.muted} />
+                            <Text style={[s2.clearText, { color: theme.muted }]}>Clear</Text>
+                        </TouchableOpacity>
+                    </View>
+                    <StockChart key={`home-explorer-${chartKey}-${activeSymbol}`} symbol={activeSymbol} height={280} />
+                </>
+            )}
+        </View>
+    );
+}
+
+const s2 = StyleSheet.create({
+    card: { margin: 20, marginTop: 0, borderRadius: 18, padding: 18, borderWidth: 1 },
+    sectionHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16 },
+    iconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center" },
+    cardTitle: { fontSize: 15, fontWeight: "700" },
+    cardSub: { fontSize: 11, marginTop: 1 },
+    searchRow: { flexDirection: "row", gap: 10, marginBottom: 10 },
+    searchInput: {
+        flex: 1, borderRadius: 12, borderWidth: 1,
+        paddingHorizontal: 14, height: 46, fontSize: 14,
+    },
+    searchBtn: {
+        width: 46, height: 46, borderRadius: 12,
+        justifyContent: "center", alignItems: "center",
+    },
+    hintText: { fontSize: 11, marginBottom: 10 },
+    pillsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 4 },
+    pill: { borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1 },
+    pillText: { fontSize: 11, fontWeight: "600" },
+    chartHeader: {
+        flexDirection: "row", alignItems: "center",
+        justifyContent: "space-between", marginTop: 14, marginBottom: 2,
+    },
+    liveDot: { width: 6, height: 6, borderRadius: 3 },
+    chartSymbolText: { fontSize: 13, fontWeight: "700" },
+    clearBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+    clearText: { fontSize: 11 },
+});
+
+// ── Home Screen ────────────────────────────────────────────────────────────────
 export default function HomeScreen() {
     const { user, logout } = useAuth();
     const { theme, isDark, toggle } = useTheme();
@@ -31,7 +253,7 @@ export default function HomeScreen() {
         finally { setLoading(false); setRefreshing(false); }
     }, []);
 
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => { fetchData(); }, [fetchData]);
     const onRefresh = () => { setRefreshing(true); fetchData(); };
     const plPositive = totalPL >= 0;
 
@@ -52,7 +274,6 @@ export default function HomeScreen() {
                     <Text style={s.username}>{user?.username}</Text>
                 </View>
                 <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
-                    {/* Theme Toggle */}
                     <TouchableOpacity onPress={toggle} style={s.iconBtn}>
                         <Ionicons name={isDark ? "sunny-outline" : "moon-outline"} size={18} color={theme.accent} />
                     </TouchableOpacity>
@@ -105,6 +326,10 @@ export default function HomeScreen() {
                     </TouchableOpacity>
                 ))}
             </View>
+
+            {/* Stock Chart Explorer */}
+            <Text style={s.sectionTitle}>EXPLORE STOCK CHARTS</Text>
+            <StockChartExplorer theme={theme} />
 
             {/* How it works */}
             <Text style={s.sectionTitle}>HOW SMARTCHANGE WORKS</Text>

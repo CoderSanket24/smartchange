@@ -1,11 +1,14 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
     RefreshControl, ActivityIndicator, TextInput, Alert,
+    Animated,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { WebView } from "react-native-webview";
 import { useTheme } from "../../context/ThemeContext";
-import { aiApi, walletApi } from "../../services/api";
+import { aiApi, walletApi, notificationsApi } from "../../services/api";
+import { useFocusEffect } from "expo-router";
 
 interface Recommendation {
     rank: number;
@@ -17,6 +20,7 @@ interface Recommendation {
     suggested_amount: number;
     policy_weight?: number;
     rationale: string;
+    reason?: string;
     explanation: {
         feature_scores?: Record<string, number>;
         shap_values?: Record<string, number>;
@@ -27,17 +31,153 @@ interface Recommendation {
     };
 }
 
+interface AppNotification { type: string; title: string; body: string; icon: string; }
+
+// ── Stock chart — Lightweight Charts + backend yfinance endpoint ──────────────
+function StockChart({ symbol, height = 220 }: { symbol: string; height?: number }) {
+    const html = useMemo(() => {
+        const clean = symbol
+            .replace(/^(NSE:|BSE:)/i, "")
+            .replace(/\.(NS|BO)$/i, "")
+            .trim()
+            .toUpperCase();
+        // Fetch from our own backend — no CORS issues, real yfinance data
+        const apiUrl = `http://172.168.3.112:8000/portfolio/stocks/${clean}/history`;
+
+        return `<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body, html { background:#111827; overflow:hidden; font-family:sans-serif; }
+  #chart { width:100%; height:${height}px; }
+  .overlay { position:absolute; inset:0; display:flex; flex-direction:column;
+             align-items:center; justify-content:center; background:#111827; }
+  .msg { color:#9CA3AF; font-size:12px; margin-top:8px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#F59E0B;
+          animation:pulse 1s infinite alternate; }
+  @keyframes pulse { from{opacity:0.3} to{opacity:1} }
+  .sym { color:#F59E0B; font-size:13px; font-weight:700; margin-bottom:4px; }
+  .err { color:#EF4444; font-size:11px; text-align:center; padding:8px; }
+</style>
+</head><body>
+<div id="wrapper" style="position:relative;width:100%;height:${height}px">
+  <div id="chart"></div>
+  <div class="overlay" id="overlay">
+    <div class="sym">${clean}</div>
+    <div class="dot"></div>
+    <div class="msg">Loading chart…</div>
+  </div>
+</div>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"><\/script>
+<script>
+(function() {
+  var h = ${height};
+  fetch('${apiUrl}')
+    .then(function(r){ return r.json(); })
+    .then(function(data) {
+      var candles = data.candles;
+      if (!candles || candles.length === 0) throw new Error('empty');
+      candles.sort(function(a,b){ return a.time - b.time; });
+      document.getElementById('overlay').style.display = 'none';
+      var chart = LightweightCharts.createChart(document.getElementById('chart'), {
+        width: window.innerWidth,
+        height: h,
+        layout: { background:{color:'#111827'}, textColor:'#9CA3AF' },
+        grid: { vertLines:{color:'#1F2937'}, horzLines:{color:'#1F2937'} },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor:'#374151' },
+        timeScale: { borderColor:'#374151', timeVisible:false },
+        handleScroll: false, handleScale: false,
+      });
+      var series = chart.addCandlestickSeries({
+        upColor:'#22C55E', downColor:'#EF4444',
+        borderVisible:false,
+        wickUpColor:'#22C55E', wickDownColor:'#EF4444',
+      });
+      series.setData(candles);
+      chart.timeScale().fitContent();
+    })
+    .catch(function(e) {
+      document.getElementById('overlay').innerHTML =
+        '<div class="err">Could not load chart.<br>Make sure the backend is running.</div>';
+    });
+})();
+<\/script>
+</body></html>`;
+    }, [symbol, height]);
+
+    return (
+        <View style={{ height, borderRadius: 12, overflow: "hidden", marginTop: 12 }}>
+            <WebView
+                source={{ html }}
+                style={{ flex: 1, backgroundColor: "#111827" }}
+                scrollEnabled={false}
+                javaScriptEnabled
+                domStorageEnabled
+                originWhitelist={["*"]}
+                mixedContentMode="always"
+            />
+        </View>
+    );
+}
+
+
+// ── Notification banner ────────────────────────────────────────────────────────
+function NotificationBanner({ notifs, theme }: { notifs: AppNotification[]; theme: any }) {
+    const [idx, setIdx] = useState(0);
+    const [visible, setVisible] = useState(true);
+    if (!visible || notifs.length === 0) return null;
+    const n = notifs[idx % notifs.length];
+    const colorMap: Record<string, string> = {
+        wallet: "#F59E0B", portfolio: "#22C55E", ai: "#A78BFA",
+    };
+    const color = colorMap[n.type] ?? "#60A5FA";
+    return (
+        <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => setIdx(i => i + 1)}
+            style={[{ backgroundColor: `${color}18`, borderColor: `${color}40`, borderWidth: 1,
+                borderRadius: 14, marginHorizontal: 20, marginBottom: 16,
+                padding: 12, flexDirection: "row", alignItems: "center", gap: 10 }]}
+        >
+            <Ionicons name={n.icon as any} size={18} color={color} />
+            <View style={{ flex: 1 }}>
+                <Text style={{ color: color, fontWeight: "700", fontSize: 12 }}>{n.title}</Text>
+                <Text style={{ color: theme.subtext, fontSize: 11, marginTop: 1 }}>{n.body}</Text>
+            </View>
+            {notifs.length > 1 && (
+                <Text style={{ color: color, fontSize: 10, fontWeight: "700" }}>
+                    {(idx % notifs.length) + 1}/{notifs.length}
+                </Text>
+            )}
+            <TouchableOpacity onPress={() => setVisible(false)}>
+                <Ionicons name="close" size={14} color={theme.muted} />
+            </TouchableOpacity>
+        </TouchableOpacity>
+    );
+}
+
+// ── Skeleton ───────────────────────────────────────────────────────────────────
+function SkeletonBox({ width, height, style }: { width: number | string; height: number; style?: object }) {
+    const opacity = React.useRef(new Animated.Value(0.4)).current;
+    useEffect(() => {
+        const anim = Animated.loop(Animated.sequence([
+            Animated.timing(opacity, { toValue: 1, duration: 700, useNativeDriver: true }),
+            Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+        ]));
+        anim.start();
+        return () => anim.stop();
+    }, [opacity]);
+    return <Animated.View style={[{ width, height, borderRadius: 8, backgroundColor: "#2a2a3a" }, style, { opacity }]} />;
+}
+
 const FEATURE_COLORS: Record<string, string> = {
-    momentum: "#00D4FF",
-    low_volatility: "#22C55E",
-    value: "#F59E0B",
-    large_cap: "#A855F7",
+    momentum: "#00D4FF", low_volatility: "#22C55E", value: "#F59E0B", large_cap: "#A855F7",
 };
 const FEATURE_ICONS: Record<string, any> = {
-    momentum: "trending-up-outline",
-    low_volatility: "shield-outline",
-    value: "pricetag-outline",
-    large_cap: "business-outline",
+    momentum: "trending-up-outline", low_volatility: "shield-outline",
+    value: "pricetag-outline", large_cap: "business-outline",
 };
 
 export default function AIScreen() {
@@ -50,6 +190,15 @@ export default function AIScreen() {
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [expanded, setExpanded] = useState<string | null>(null);
+    const [chartVisible, setChartVisible] = useState<string | null>(null);
+    const [notifs, setNotifs] = useState<AppNotification[]>([]);
+
+    const fetchNotifs = useCallback(async () => {
+        try {
+            const res = await notificationsApi.getAll();
+            setNotifs(res.data.notifications ?? []);
+        } catch { /* silent */ }
+    }, []);
 
     const fetchRecs = useCallback(async () => {
         setLoading(true);
@@ -66,9 +215,12 @@ export default function AIScreen() {
         } finally { setLoading(false); setRefreshing(false); }
     }, [amount, topN]);
 
-    useEffect(() => { fetchRecs(); }, []);
-    const onRefresh = () => { setRefreshing(true); fetchRecs(); };
+    // Fetch recs when screen gains focus
+    useFocusEffect(useCallback(() => { fetchRecs(); }, [fetchRecs]));
+    // Fetch notifications when screen gains focus (separate effect, stable dep)
+    useFocusEffect(useCallback(() => { fetchNotifs(); }, [fetchNotifs]));
 
+    const onRefresh = () => { setRefreshing(true); fetchRecs(); fetchNotifs(); };
     const s = makeStyles(theme);
 
     return (
@@ -87,6 +239,9 @@ export default function AIScreen() {
                 </View>
             </View>
 
+            {/* Notification Banner */}
+            <NotificationBanner notifs={notifs} theme={theme} />
+
             {/* Config Card */}
             <View style={s.configCard}>
                 <Text style={s.configTitle}>Configure Recommendation</Text>
@@ -94,21 +249,15 @@ export default function AIScreen() {
                     <View style={s.configField}>
                         <Text style={s.label}>Amount (₹)</Text>
                         <TextInput
-                            style={s.input}
-                            value={amount}
-                            onChangeText={setAmount}
-                            keyboardType="decimal-pad"
-                            placeholderTextColor={theme.muted}
+                            style={s.input} value={amount} onChangeText={setAmount}
+                            keyboardType="decimal-pad" placeholderTextColor={theme.muted}
                         />
                     </View>
                     <View style={s.configField}>
                         <Text style={s.label}>Top N Stocks</Text>
                         <TextInput
-                            style={s.input}
-                            value={topN}
-                            onChangeText={setTopN}
-                            keyboardType="number-pad"
-                            placeholderTextColor={theme.muted}
+                            style={s.input} value={topN} onChangeText={setTopN}
+                            keyboardType="number-pad" placeholderTextColor={theme.muted}
                         />
                     </View>
                 </View>
@@ -148,13 +297,33 @@ export default function AIScreen() {
             {/* Recommendations */}
             <Text style={s.sectionTitle}>RECOMMENDATIONS</Text>
             {loading && recs.length === 0 ? (
-                <View style={s.loadingBox}><ActivityIndicator size="large" color={theme.amber} /></View>
+                <View style={s.loadingBox}>
+                    {[1, 2, 3].map(k => (
+                        <View key={k} style={[s.recCard, { gap: 12 }]}>
+                            <View style={{ flexDirection: "row", gap: 12 }}>
+                                <SkeletonBox width={32} height={32} style={{ borderRadius: 10 }} />
+                                <View style={{ flex: 1, gap: 6 }}>
+                                    <SkeletonBox width="50%" height={14} />
+                                    <SkeletonBox width="70%" height={10} />
+                                </View>
+                                <View style={{ gap: 6, alignItems: "flex-end" }}>
+                                    <SkeletonBox width={40} height={18} />
+                                    <SkeletonBox width={60} height={10} />
+                                </View>
+                            </View>
+                            <SkeletonBox width="100%" height={10} />
+                            <SkeletonBox width="80%" height={10} />
+                        </View>
+                    ))}
+                </View>
             ) : recs.map((rec) => {
                 const isExpanded = expanded === rec.stock_symbol;
+                const showChart = chartVisible === rec.stock_symbol;
                 const topFactor = rec.explanation?.top_factor ?? null;
                 const topColor = topFactor ? (FEATURE_COLORS[topFactor] ?? theme.accent) : theme.accent;
                 const shapVals = rec.explanation?.shap_values ?? null;
                 const maxShap = shapVals ? Math.max(...Object.values(shapVals)) : 0;
+                const nseSymbol = rec.stock_symbol.replace(".NS", "");
 
                 return (
                     <View key={rec.stock_symbol} style={s.recCard}>
@@ -163,7 +332,7 @@ export default function AIScreen() {
                             <View style={s.rankBadge}><Text style={s.rankText}>#{rec.rank}</Text></View>
                             <View style={s.recInfo}>
                                 <View style={s.recNameRow}>
-                                    <Text style={s.recSymbol}>{rec.stock_symbol}</Text>
+                                    <Text style={s.recSymbol}>{nseSymbol}</Text>
                                     <View style={s.sectorBadge}><Text style={s.sectorText}>{rec.sector}</Text></View>
                                 </View>
                                 <Text style={s.recName}>{rec.stock_name}</Text>
@@ -175,7 +344,7 @@ export default function AIScreen() {
                             </View>
                         </View>
 
-                        {/* Top Factor Badge — heuristic mode */}
+                        {/* Top Factor Badge */}
                         {topFactor && (
                             <View style={[s.topFactorRow, { backgroundColor: `${topColor}15`, borderColor: `${topColor}30` }]}>
                                 <Ionicons name={FEATURE_ICONS[topFactor] ?? "analytics-outline"} size={13} color={topColor} />
@@ -193,40 +362,66 @@ export default function AIScreen() {
                             </View>
                         )}
 
+                        {/* AI Reason — human-readable */}
+                        {rec.reason && (
+                            <View style={s.reasonBox}>
+                                <Ionicons name="bulb-outline" size={13} color="#F59E0B" style={{ marginTop: 1 }} />
+                                <Text style={s.reasonText}>{rec.reason}</Text>
+                            </View>
+                        )}
+
                         {/* Rationale */}
                         <Text style={s.rationale}>{rec.rationale}</Text>
 
-                        {/* SHAP / PPO note */}
-                        {shapVals ? (
-                            <>
-                                <TouchableOpacity style={s.expandBtn} onPress={() => setExpanded(isExpanded ? null : rec.stock_symbol)}>
-                                    <Text style={s.expandText}>{isExpanded ? "Hide" : "View"} SHAP Explanation</Text>
+                        {/* Action row: Chart toggle + SHAP */}
+                        <View style={s.actionRow}>
+                            <TouchableOpacity
+                                style={s.chartBtn}
+                                onPress={() => setChartVisible(showChart ? null : rec.stock_symbol)}
+                            >
+                                <Ionicons name={showChart ? "eye-off-outline" : "bar-chart-outline"} size={13} color={theme.amber} />
+                                <Text style={s.expandText}>{showChart ? "Hide" : "View"} Chart</Text>
+                            </TouchableOpacity>
+
+                            {shapVals && (
+                                <TouchableOpacity
+                                    style={s.expandBtn}
+                                    onPress={() => setExpanded(isExpanded ? null : rec.stock_symbol)}
+                                >
+                                    <Text style={s.expandText}>{isExpanded ? "Hide" : "View"} SHAP</Text>
                                     <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color={theme.amber} />
                                 </TouchableOpacity>
-                                {isExpanded && (
-                                    <View style={s.shapBox}>
-                                        <Text style={s.shapTitle}>Feature Importance (SHAP)</Text>
-                                        {Object.entries(shapVals).sort((a, b) => b[1] - a[1]).map(([feat, val]) => {
-                                            const color = FEATURE_COLORS[feat] ?? theme.text;
-                                            const pct = maxShap > 0 ? (val / maxShap) * 100 : 0;
-                                            return (
-                                                <View key={feat} style={s.shapRow}>
-                                                    <Ionicons name={FEATURE_ICONS[feat] ?? "analytics-outline"} size={13} color={color} style={{ width: 20 }} />
-                                                    <Text style={s.shapFeat}>{feat.replace("_", " ")}</Text>
-                                                    <View style={s.shapBar}>
-                                                        <View style={[s.shapFill, { width: `${pct}%` as any, backgroundColor: color }]} />
-                                                    </View>
-                                                    <Text style={[s.shapVal, { color }]}>{val.toFixed(4)}</Text>
-                                                </View>
-                                            );
-                                        })}
-                                        <Text style={s.shapNote}>Higher SHAP value = stronger influence on recommendation</Text>
-                                    </View>
-                                )}
-                            </>
-                        ) : rec.explanation?.note ? (
+                            )}
+                        </View>
+
+                        {/* Stock Chart (Lightweight Charts + Yahoo Finance) */}
+                        {showChart && <StockChart key={`rec-${rec.stock_symbol}`} symbol={nseSymbol} />}
+
+                        {/* SHAP Explanation */}
+                        {shapVals && isExpanded && (
+                            <View style={s.shapBox}>
+                                <Text style={s.shapTitle}>Feature Importance (SHAP)</Text>
+                                {Object.entries(shapVals).sort((a, b) => b[1] - a[1]).map(([feat, val]) => {
+                                    const color = FEATURE_COLORS[feat] ?? theme.text;
+                                    const pct = maxShap > 0 ? (val / maxShap) * 100 : 0;
+                                    return (
+                                        <View key={feat} style={s.shapRow}>
+                                            <Ionicons name={FEATURE_ICONS[feat] ?? "analytics-outline"} size={13} color={color} style={{ width: 20 }} />
+                                            <Text style={s.shapFeat}>{feat.replace("_", " ")}</Text>
+                                            <View style={s.shapBar}>
+                                                <View style={[s.shapFill, { width: `${pct}%` as any, backgroundColor: color }]} />
+                                            </View>
+                                            <Text style={[s.shapVal, { color }]}>{val.toFixed(4)}</Text>
+                                        </View>
+                                    );
+                                })}
+                                <Text style={s.shapNote}>Higher SHAP value = stronger influence on recommendation</Text>
+                            </View>
+                        )}
+
+                        {!shapVals && rec.explanation?.note && (
                             <Text style={s.shapNote}>{rec.explanation.note}</Text>
-                        ) : null}
+                        )}
                     </View>
                 );
             })}
@@ -258,7 +453,7 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
         summaryChip: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: t.accentDim, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20, borderWidth: 1, borderColor: t.accentBorder },
         summaryChipText: { color: t.subtext, fontSize: 11 },
         sectionTitle: { color: t.subtext, fontSize: 11, fontWeight: "700", letterSpacing: 1, paddingHorizontal: 20, marginBottom: 12 },
-        loadingBox: { alignItems: "center", padding: 40 },
+        loadingBox: { paddingHorizontal: 20, gap: 14 },
         recCard: { marginHorizontal: 20, marginBottom: 14, backgroundColor: t.card, borderRadius: 16, padding: 18, borderWidth: 1, borderColor: t.border },
         recHeader: { flexDirection: "row", alignItems: "flex-start", marginBottom: 12, gap: 12 },
         rankBadge: { width: 32, height: 32, borderRadius: 10, backgroundColor: `${t.amber}25`, justifyContent: "center", alignItems: "center" },
@@ -275,8 +470,12 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
         allocAmt: { color: t.muted, fontSize: 11, marginTop: 2 },
         topFactorRow: { flexDirection: "row", alignItems: "center", gap: 6, padding: 8, borderRadius: 8, borderWidth: 1, marginBottom: 10 },
         topFactorText: { fontSize: 12, fontWeight: "600" },
-        rationale: { color: t.subtext, fontSize: 12, lineHeight: 18, marginBottom: 12 },
-        expandBtn: { flexDirection: "row", alignItems: "center", gap: 6, justifyContent: "flex-end" },
+        reasonBox: { flexDirection: "row", alignItems: "flex-start", gap: 6, backgroundColor: "#F59E0B18", borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: "#F59E0B30" },
+        reasonText: { color: t.subtext, fontSize: 12, lineHeight: 17, flex: 1 },
+        rationale: { color: t.muted, fontSize: 11, lineHeight: 17, marginBottom: 12, opacity: 0.8 },
+        actionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+        chartBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
+        expandBtn: { flexDirection: "row", alignItems: "center", gap: 6 },
         expandText: { color: t.amber, fontSize: 12, fontWeight: "600" },
         shapBox: { marginTop: 14, backgroundColor: t.inputBg, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: t.border },
         shapTitle: { color: t.text, fontSize: 12, fontWeight: "700", marginBottom: 12 },

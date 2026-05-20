@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
 from app.database import Base, engine
-from app.routers import auth, wallet, portfolio, ai
+from app.routers import auth, wallet, portfolio, ai, notifications
 
 # Import ALL models so SQLAlchemy registers them for table creation
 import app.models.user       # noqa: F401
@@ -28,10 +28,11 @@ app.add_middleware(
 )
 
 # Routers
-app.include_router(auth.router)       # Phase 1 – Authentication
-app.include_router(wallet.router)     # Phase 2 – Virtual Wallet
-app.include_router(portfolio.router)  # Phase 3 – Portfolio
-app.include_router(ai.router)         # Phase 4 – AI Recommendations
+app.include_router(auth.router)            # Phase 1 – Authentication
+app.include_router(wallet.router)          # Phase 2 – Virtual Wallet
+app.include_router(portfolio.router)       # Phase 3 – Portfolio
+app.include_router(ai.router)              # Phase 4 – AI Recommendations
+app.include_router(notifications.router)   # Phase 5 – Notifications
 
 
 @app.on_event("startup")

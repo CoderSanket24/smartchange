@@ -159,6 +159,16 @@ def _decision_reason(log_ret: float, sma_norm: float, vol_norm: float,
 
 
 # ── Equal-weight fallback ─────────────────────────────────────────────────────
+def _simple_reason(info: dict) -> str:
+    """Generate a short reason string for equal-weight fallback stocks."""
+    parts = []
+    sector = info.get("sector", "")
+    if sector:
+        parts.append(f"{sector} sector stock")
+    parts.append("equal-weight allocation")
+    return "; ".join(parts)
+
+
 def _equal_weight_fallback(amount: float, top_n: int) -> dict:
     from app.routers.portfolio import STOCK_UNIVERSE
     symbols = list(STOCK_UNIVERSE.keys())[:top_n]
@@ -177,6 +187,7 @@ def _equal_weight_fallback(amount: float, top_n: int) -> dict:
             "suggested_amount": round(amount * w, 2),
             "policy_weight":    round(w, 4),
             "rationale":        f"Equal-weight fallback: 1/{len(symbols)} allocation.",
+            "reason":           _simple_reason(info),
             "explanation":      {"method": "Equal-Weight (PPO not available)", "note": "Train the model at /ai/model-info"},
         })
     return {
@@ -269,19 +280,38 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
 
         sector_exposure[sector] = sector_exposure.get(sector, 0) + 1
 
+        # Build human-readable reason from live features
+        try:
+            col = sym if sym in raw_close.columns else sym.replace(".NS", "")
+            if col in raw_close.columns:
+                s_series = raw_close[col]
+                lr   = float(np.log(s_series.iloc[-1] / (s_series.iloc[-2] + 1e-8) + 1e-8))
+                sm14 = s_series.rolling(14).mean().dropna()
+                sn   = float((sm14.iloc[-1] - sm14.min()) / (sm14.max() - sm14.min() + 1e-8)) if len(sm14) else 0.5
+                v14  = s_series.rolling(14).std().dropna()
+                vn   = float(v14.iloc[-1] / (v14.max() + 1e-8)) if len(v14) else 0.5
+                rn   = _rsi_norm(s_series)
+                m5   = float(s_series.pct_change(5).iloc[-1]) if len(s_series) > 5 else 0.0
+                reason = _decision_reason(lr, sn, vn, rn, m5, alloc)
+            else:
+                reason = f"PPO allocates {alloc*100:.1f}% based on policy network weights."
+        except Exception:
+            reason = f"PPO allocates {alloc*100:.1f}% to {sym}."
+
         recs.append({
             "rank":             rank + 1,
-            "stock_symbol":     sym,                        # yfinance canonical name
+            "stock_symbol":     sym,
             "stock_name":       info.get("name", sym),
             "sector":           sector,
             "current_price":    info.get("price", 0.0),
             "allocation_pct":   round(alloc * 100, 2),
             "suggested_amount": amt,
-            "policy_weight":    pw,                          # renamed from q_value
+            "policy_weight":    pw,
             "rationale": (
                 f"PPO allocates {alloc*100:.1f}% to {sym} based on "
                 f"live log-returns, RSI, SMA-14, and momentum features."
             ),
+            "reason":           reason,
             "explanation": {
                 "method":        "PPO MlpPolicy (deterministic=True)",
                 "policy_weight": pw,

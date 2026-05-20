@@ -17,6 +17,7 @@ from app.services.ai_service import (
     get_stock_explanation,
     get_backtest_results,
     get_model_info,
+    get_equity_curve,
 )
 
 router = APIRouter(prefix="/ai", tags=["AI"])
@@ -74,3 +75,14 @@ def model_info(current_user: User = Depends(get_current_user)):
     and test-set performance metrics (if backtest has been run).
     """
     return get_model_info()
+
+
+# ── /ai/equity-curve ──────────────────────────────────────────────────────────
+@router.get("/equity-curve")
+def equity_curve(current_user: User = Depends(get_current_user)):
+    """
+    PPO vs Equal-Weight vs NIFTY-50 equity curve data for charting.
+    Returns parallel arrays: dates, ppo, equal_weight, nifty.
+    Requires backtest to have been run (generates equity_curves.csv).
+    """
+    return get_equity_curve()

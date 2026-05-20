@@ -51,4 +51,10 @@ export const aiApi = {
   recommend: (amount: number, top_n: number = 4) =>
     API.get(`/ai/recommend?amount=${amount}&top_n=${top_n}`),
   explain: (symbol: string) => API.get(`/ai/explain/${symbol}`),
+  equityCurve: () => API.get("/ai/equity-curve"),
+};
+
+// Notifications helper
+export const notificationsApi = {
+  getAll: () => API.get("/notifications"),
 };

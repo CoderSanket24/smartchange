@@ -185,3 +185,56 @@ def get_model_info() -> dict:
         meta["test_performance"] = None
 
     return meta
+
+
+def get_equity_curve() -> dict:
+    """
+    Read equity_curves.csv (written by rl_backtest.py) and return
+    parallel arrays suitable for chart rendering.
+
+    Expected CSV columns: Date, PPO, Equal-Weight, NIFTY-50
+    Raises HTTP 404 if the file doesn't exist yet.
+    """
+    import pandas as pd
+
+    csv_path = MODELS_DIR / "equity_curves.csv"
+    if not csv_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Equity curve data not found. "
+                "Run: docker exec -it smartchange_backend "
+                "python app/ai/rl_backtest.py"
+            ),
+        )
+
+    try:
+        df = pd.read_csv(csv_path, parse_dates=True, index_col=0)
+        df = df.ffill().dropna()
+
+        # Normalise column names — backtest may use different capitalisations
+        col_map: dict[str, str] = {}
+        for col in df.columns:
+            lc = col.lower().replace("-", "_").replace(" ", "_")
+            if "ppo" in lc:
+                col_map[col] = "ppo"
+            elif "equal" in lc or "ew" in lc:
+                col_map[col] = "equal_weight"
+            elif "nifty" in lc or "nifty50" in lc:
+                col_map[col] = "nifty"
+        df = df.rename(columns=col_map)
+
+        result: dict = {"dates": [str(d)[:10] for d in df.index.tolist()]}
+        for key in ("ppo", "equal_weight", "nifty"):
+            if key in df.columns:
+                result[key] = [round(float(v), 4) for v in df[key].tolist()]
+            else:
+                result[key] = []
+
+        return result
+    except Exception as exc:
+        log.error(f"Failed to read equity_curves.csv: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error reading equity curve data: {exc}",
+        )

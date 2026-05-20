@@ -35,7 +35,7 @@ export default function WalletScreen() {
         finally { setLoading(false); setRefreshing(false); }
     }, []);
 
-    useEffect(() => { fetchSummary(); }, []);
+    useEffect(() => { fetchSummary(); }, [fetchSummary]);
     const onRefresh = () => { setRefreshing(true); fetchSummary(); };
 
     const handleAdd = async () => {
@@ -108,7 +108,7 @@ export default function WalletScreen() {
                     <View style={s.emptyCard}>
                         <Ionicons name="receipt-outline" size={40} color={theme.border} />
                         <Text style={s.emptyText}>No transactions yet</Text>
-                        <Text style={s.emptySubText}>Tap "Add Spend" to log your first purchase</Text>
+                        <Text style={s.emptySubText}>Tap {"\"Add Spend\""} to log your first purchase</Text>
                     </View>
                 ) : (
                     summary.transactions.map((txn: Transaction) => (
