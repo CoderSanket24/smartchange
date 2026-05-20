@@ -1,32 +1,33 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
-    RefreshControl, Alert, ActivityIndicator, Modal, TextInput, FlatList,
-    Animated,
+    RefreshControl, Alert, ActivityIndicator, Modal, TextInput,
+    FlatList, Animated, Dimensions, StatusBar,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../context/ThemeContext";
 import { portfolioApi, walletApi } from "../../services/api";
 import { useFocusEffect } from "expo-router";
 
+const { height: SCREEN_H, width: SCREEN_W } = Dimensions.get("window");
+
 interface Stock { symbol: string; name: string; price: number; }
 interface HoldingPerf {
     stock_symbol: string; stock_name: string; shares: number;
     invested_amount: number; current_value: number;
-    profit_loss: number; profit_loss_pct: number; current_price: number;
-    avg_buy_price: number;
+    profit_loss: number; profit_loss_pct: number;
+    current_price: number; avg_buy_price: number;
+    invested_at?: string | null;
 }
 
-// ── Skeleton pulse component ───────────────────────────────────────────────────
+// ── Skeleton ───────────────────────────────────────────────────────────────────
 function SkeletonBox({ width, height, style }: { width: number | string; height: number; style?: object }) {
     const opacity = React.useRef(new Animated.Value(0.4)).current;
     useEffect(() => {
-        const anim = Animated.loop(
-            Animated.sequence([
-                Animated.timing(opacity, { toValue: 1, duration: 700, useNativeDriver: true }),
-                Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
-            ])
-        );
+        const anim = Animated.loop(Animated.sequence([
+            Animated.timing(opacity, { toValue: 1, duration: 700, useNativeDriver: true }),
+            Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+        ]));
         anim.start();
         return () => anim.stop();
     }, [opacity]);
@@ -51,6 +52,332 @@ function SkeletonCard({ theme }: { theme: any }) {
     );
 }
 
+// ── Stat Row used inside the detail sheet ─────────────────────────────────────
+function StatRow({ label, value, valueColor, icon }: { label: string; value: string; valueColor?: string; icon?: string }) {
+    return (
+        <View style={detailStyles.statRow}>
+            <Text style={detailStyles.statLabel}>{label}</Text>
+            <Text style={[detailStyles.statValue, valueColor ? { color: valueColor } : {}]}>{value}</Text>
+        </View>
+    );
+}
+
+// ── Mini bar chart ─────────────────────────────────────────────────────────────
+function MiniBarChart({ invested, current, theme }: { invested: number; current: number; theme: any }) {
+    const max = Math.max(invested, current);
+    const investedW = max > 0 ? (invested / max) * 100 : 50;
+    const currentW  = max > 0 ? (current  / max) * 100 : 50;
+    const isProfit   = current >= invested;
+
+    return (
+        <View style={{ marginTop: 20, marginBottom: 4 }}>
+            <Text style={[detailStyles.statLabel, { marginBottom: 10 }]}>Invested vs Current</Text>
+            <View style={{ gap: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <Text style={{ color: theme.muted, fontSize: 10, width: 62 }}>Invested</Text>
+                    <View style={{ flex: 1, height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: "hidden" }}>
+                        <Animated.View style={{ width: `${investedW}%`, height: "100%", backgroundColor: theme.accent, borderRadius: 4 }} />
+                    </View>
+                    <Text style={{ color: theme.subtext, fontSize: 10, width: 62, textAlign: "right" }}>₹{invested.toFixed(0)}</Text>
+                </View>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <Text style={{ color: theme.muted, fontSize: 10, width: 62 }}>Current</Text>
+                    <View style={{ flex: 1, height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: "hidden" }}>
+                        <Animated.View style={{ width: `${currentW}%`, height: "100%", backgroundColor: isProfit ? "#22C55E" : "#EF4444", borderRadius: 4 }} />
+                    </View>
+                    <Text style={{ color: isProfit ? "#22C55E" : "#EF4444", fontSize: 10, width: 62, textAlign: "right" }}>₹{current.toFixed(0)}</Text>
+                </View>
+            </View>
+        </View>
+    );
+}
+
+// ── Stock Detail Bottom Sheet ──────────────────────────────────────────────────
+function StockDetailSheet({
+    holding, visible, onClose, theme, onInvestMore,
+}: {
+    holding: HoldingPerf | null;
+    visible: boolean;
+    onClose: () => void;
+    theme: any;
+    onInvestMore: (h: HoldingPerf) => void;
+}) {
+    const slideAnim = useRef(new Animated.Value(SCREEN_H)).current;
+
+    useEffect(() => {
+        if (visible) {
+            Animated.spring(slideAnim, {
+                toValue: 0,
+                useNativeDriver: true,
+                damping: 20,
+                stiffness: 180,
+            }).start();
+        } else {
+            Animated.timing(slideAnim, {
+                toValue: SCREEN_H,
+                duration: 260,
+                useNativeDriver: true,
+            }).start();
+        }
+    }, [visible]);
+
+    if (!holding) return null;
+
+    const isProfit   = holding.profit_loss >= 0;
+    const plColor    = isProfit ? "#22C55E" : "#EF4444";
+    const plIcon     = isProfit ? "trending-up" : "trending-down";
+    const dayChange  = holding.current_price - holding.avg_buy_price;
+    const dayChangePct = holding.avg_buy_price > 0
+        ? ((dayChange / holding.avg_buy_price) * 100).toFixed(2)
+        : "0.00";
+
+    const investedDate = holding.invested_at
+        ? new Date(holding.invested_at).toLocaleDateString("en-IN", {
+            day: "2-digit", month: "short", year: "numeric",
+          })
+        : "—";
+
+    const portfolioWeight = holding.invested_amount > 0
+        ? ((holding.current_value / holding.invested_amount) * 100 - 100).toFixed(2)
+        : "0.00";
+
+    // Sector colour map
+    const sectorColors: Record<string, string> = {
+        IT: "#818CF8", Banking: "#34D399", Energy: "#F59E0B",
+        FMCG: "#FB923C", Metals: "#94A3B8", Infrastructure: "#60A5FA",
+        NBFC: "#A78BFA", Auto: "#F472B6", Consumer: "#2DD4BF",
+        "Consumer Durables": "#FBBF24", Cement: "#9CA3AF",
+        Telecom: "#38BDF8", Conglomerate: "#E879F9",
+    };
+
+    return (
+        <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}
+            statusBarTranslucent>
+            {/* Scrim */}
+            <TouchableOpacity activeOpacity={1} style={detailStyles.scrim} onPress={onClose} />
+
+            {/* Sheet */}
+            <Animated.View
+                style={[detailStyles.sheet, { backgroundColor: theme.surface, transform: [{ translateY: slideAnim }] }]}
+            >
+                {/* Drag handle */}
+                <View style={detailStyles.handle} />
+
+                {/* ── Header ── */}
+                <View style={detailStyles.sheetHeader}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+                        <View style={[detailStyles.bigBadge, { backgroundColor: `${theme.purple}22` }]}>
+                            <Text style={[detailStyles.bigBadgeText, { color: theme.purple }]}>
+                                {holding.stock_symbol.slice(0, 4)}
+                            </Text>
+                        </View>
+                        <View>
+                            <Text style={[detailStyles.sheetTitle, { color: theme.text }]}>{holding.stock_name}</Text>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3 }}>
+                                <View style={{ backgroundColor: `${theme.border}`, borderRadius: 5, paddingHorizontal: 7, paddingVertical: 2 }}>
+                                    <Text style={{ color: theme.muted, fontSize: 10, fontWeight: "600" }}>NSE:{holding.stock_symbol}</Text>
+                                </View>
+                            </View>
+                        </View>
+                    </View>
+                    <TouchableOpacity onPress={onClose} style={detailStyles.closeBtn}>
+                        <Ionicons name="close" size={18} color={theme.muted} />
+                    </TouchableOpacity>
+                </View>
+
+                {/* ── Live Price Hero ── */}
+                <View style={[detailStyles.priceHero, { backgroundColor: `${plColor}12`, borderColor: `${plColor}25` }]}>
+                    <View>
+                        <Text style={{ color: theme.muted, fontSize: 11, marginBottom: 2 }}>Current Price</Text>
+                        <Text style={{ color: theme.text, fontSize: 28, fontWeight: "800" }}>
+                            ₹{holding.current_price.toFixed(2)}
+                        </Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4 }}>
+                            <Ionicons name={plIcon} size={14} color={plColor} />
+                            <Text style={{ color: plColor, fontSize: 13, fontWeight: "700" }}>
+                                {isProfit ? "+" : ""}{dayChange.toFixed(2)} ({isProfit ? "+" : ""}{dayChangePct}%)
+                            </Text>
+                            <Text style={{ color: theme.muted, fontSize: 11 }}>vs avg buy</Text>
+                        </View>
+                    </View>
+                    <View style={{ alignItems: "flex-end" }}>
+                        <Text style={{ color: theme.muted, fontSize: 10, marginBottom: 2 }}>Your P&L</Text>
+                        <Text style={{ color: plColor, fontSize: 20, fontWeight: "800" }}>
+                            {isProfit ? "+" : ""}₹{Math.abs(holding.profit_loss).toFixed(2)}
+                        </Text>
+                        <View style={[detailStyles.plPill, { backgroundColor: `${plColor}22` }]}>
+                            <Text style={{ color: plColor, fontSize: 12, fontWeight: "700" }}>
+                                {isProfit ? "+" : ""}{holding.profit_loss_pct.toFixed(2)}%
+                            </Text>
+                        </View>
+                    </View>
+                </View>
+
+                <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
+                    {/* ── Holdings Stats Grid ── */}
+                    <View style={[detailStyles.statsCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                        <Text style={[detailStyles.cardSectionTitle, { color: theme.subtext }]}>POSITION DETAILS</Text>
+
+                        <View style={detailStyles.statsGrid}>
+                            {/* Col 1 */}
+                            <View style={{ flex: 1, gap: 16 }}>
+                                <View>
+                                    <Text style={detailStyles.gridLabel}>Invested</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{holding.invested_amount.toFixed(2)}</Text>
+                                </View>
+                                <View>
+                                    <Text style={detailStyles.gridLabel}>Avg Buy Price</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{holding.avg_buy_price.toFixed(2)}</Text>
+                                </View>
+                                <View>
+                                    <Text style={detailStyles.gridLabel}>Shares Held</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>{holding.shares.toFixed(6)}</Text>
+                                </View>
+                            </View>
+
+                            {/* Divider */}
+                            <View style={{ width: 1, backgroundColor: theme.border, marginHorizontal: 16 }} />
+
+                            {/* Col 2 */}
+                            <View style={{ flex: 1, gap: 16 }}>
+                                <View>
+                                    <Text style={detailStyles.gridLabel}>Current Value</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{holding.current_value.toFixed(2)}</Text>
+                                </View>
+                                <View>
+                                    <Text style={detailStyles.gridLabel}>Live Price</Text>
+                                    <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                                        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#22C55E" }} />
+                                        <Text style={[detailStyles.gridValue, { color: "#22C55E" }]}>₹{holding.current_price.toFixed(2)}</Text>
+                                    </View>
+                                </View>
+                                <View>
+                                    <Text style={detailStyles.gridLabel}>Invested On</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>{investedDate}</Text>
+                                </View>
+                            </View>
+                        </View>
+
+                        {/* Bar chart */}
+                        <MiniBarChart invested={holding.invested_amount} current={holding.current_value} theme={theme} />
+                    </View>
+
+                    {/* ── Returns Card ── */}
+                    <View style={[detailStyles.statsCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                        <Text style={[detailStyles.cardSectionTitle, { color: theme.subtext }]}>RETURNS BREAKDOWN</Text>
+                        <StatRow label="Total P&L"
+                            value={`${isProfit ? "+" : ""}₹${holding.profit_loss.toFixed(2)}`}
+                            valueColor={plColor} />
+                        <View style={detailStyles.divider} />
+                        <StatRow label="Return %"
+                            value={`${isProfit ? "+" : ""}${holding.profit_loss_pct.toFixed(2)}%`}
+                            valueColor={plColor} />
+                        <View style={detailStyles.divider} />
+                        <StatRow label="Price Change vs Avg"
+                            value={`${dayChange >= 0 ? "+" : ""}₹${dayChange.toFixed(2)}`}
+                            valueColor={dayChange >= 0 ? "#22C55E" : "#EF4444"} />
+                        <View style={detailStyles.divider} />
+                        <StatRow label="Portfolio Gain/Loss"
+                            value={`${parseFloat(portfolioWeight) >= 0 ? "+" : ""}${portfolioWeight}%`}
+                            valueColor={parseFloat(portfolioWeight) >= 0 ? "#22C55E" : "#EF4444"} />
+                    </View>
+
+                    <View style={{ height: 24 }} />
+                </ScrollView>
+
+                {/* ── Action Buttons ── */}
+                <View style={[detailStyles.actionBar, { borderTopColor: theme.border }]}>
+                    <TouchableOpacity
+                        style={[detailStyles.actionBtn, { backgroundColor: `${theme.purple}20`, borderColor: `${theme.purple}40`, borderWidth: 1 }]}
+                        onPress={() => { onClose(); onInvestMore(holding); }}
+                    >
+                        <Ionicons name="add-circle-outline" size={16} color={theme.purple} />
+                        <Text style={[detailStyles.actionBtnText, { color: theme.purple }]}>Invest More</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[detailStyles.actionBtn, { backgroundColor: theme.amber, flex: 1.4 }]}
+                        onPress={onClose}
+                    >
+                        <Ionicons name="close-circle-outline" size={16} color="#000" />
+                        <Text style={[detailStyles.actionBtnText, { color: "#000" }]}>Close</Text>
+                    </TouchableOpacity>
+                </View>
+            </Animated.View>
+        </Modal>
+    );
+}
+
+const detailStyles = StyleSheet.create({
+    scrim: {
+        position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+        backgroundColor: "rgba(0,0,0,0.55)",
+    },
+    sheet: {
+        position: "absolute", bottom: 0, left: 0, right: 0,
+        borderTopLeftRadius: 28, borderTopRightRadius: 28,
+        paddingTop: 12, paddingHorizontal: 20,
+        maxHeight: SCREEN_H * 0.88,
+        shadowColor: "#000", shadowOffset: { width: 0, height: -4 },
+        shadowOpacity: 0.3, shadowRadius: 20, elevation: 30,
+    },
+    handle: {
+        width: 40, height: 4, borderRadius: 2,
+        backgroundColor: "rgba(255,255,255,0.2)",
+        alignSelf: "center", marginBottom: 16,
+    },
+    sheetHeader: {
+        flexDirection: "row", justifyContent: "space-between",
+        alignItems: "flex-start", marginBottom: 16,
+    },
+    bigBadge: {
+        width: 52, height: 52, borderRadius: 16,
+        justifyContent: "center", alignItems: "center",
+    },
+    bigBadgeText: { fontSize: 11, fontWeight: "800" },
+    sheetTitle: { fontSize: 17, fontWeight: "700" },
+    closeBtn: {
+        width: 32, height: 32, borderRadius: 10,
+        backgroundColor: "rgba(255,255,255,0.07)",
+        justifyContent: "center", alignItems: "center",
+    },
+    priceHero: {
+        flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start",
+        borderRadius: 16, padding: 16, marginBottom: 16,
+        borderWidth: 1,
+    },
+    plPill: {
+        borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginTop: 4,
+    },
+    statsCard: {
+        borderRadius: 16, padding: 18, marginBottom: 12,
+        borderWidth: 1,
+    },
+    cardSectionTitle: {
+        fontSize: 10, fontWeight: "700", letterSpacing: 1, marginBottom: 16,
+    },
+    statsGrid: { flexDirection: "row" },
+    gridLabel: { color: "#6B7280", fontSize: 11, marginBottom: 4 },
+    gridValue: { fontSize: 14, fontWeight: "700" },
+    statRow: {
+        flexDirection: "row", justifyContent: "space-between",
+        alignItems: "center", paddingVertical: 10,
+    },
+    statLabel: { color: "#6B7280", fontSize: 13 },
+    statValue: { color: "#F9FAFB", fontSize: 13, fontWeight: "700" },
+    divider: { height: 1, backgroundColor: "rgba(255,255,255,0.06)" },
+    actionBar: {
+        flexDirection: "row", gap: 10, paddingVertical: 16,
+        borderTopWidth: 1, paddingBottom: 32,
+    },
+    actionBtn: {
+        flex: 1, flexDirection: "row", alignItems: "center",
+        justifyContent: "center", gap: 6,
+        borderRadius: 14, height: 50,
+    },
+    actionBtnText: { fontWeight: "700", fontSize: 14 },
+});
+
+// ── Main Screen ────────────────────────────────────────────────────────────────
 export default function PortfolioScreen() {
     const { theme } = useTheme();
     const [perf, setPerf] = useState<any>(null);
@@ -59,11 +386,17 @@ export default function PortfolioScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [priceLoading, setPriceLoading] = useState(false);
-    const [modalVisible, setModalVisible] = useState(false);
+    const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+
+    // Invest modal
+    const [investModal, setInvestModal] = useState(false);
     const [selectedStock, setSelectedStock] = useState<Stock | null>(null);
     const [investAmount, setInvestAmount] = useState("");
     const [investing, setInvesting] = useState(false);
-    const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+
+    // Detail sheet
+    const [detailHolding, setDetailHolding] = useState<HoldingPerf | null>(null);
+    const [detailVisible, setDetailVisible] = useState(false);
 
     const fetchData = useCallback(async (showPriceSpinner = false) => {
         if (showPriceSpinner) setPriceLoading(true);
@@ -85,14 +418,26 @@ export default function PortfolioScreen() {
         }
     }, []);
 
-    // Refresh on screen focus
-    useFocusEffect(
-        useCallback(() => {
-            fetchData(true);
-        }, [fetchData])
-    );
-
+    useFocusEffect(useCallback(() => { fetchData(true); }, [fetchData]));
     const onRefresh = () => { setRefreshing(true); fetchData(); };
+
+    const openDetail = (h: HoldingPerf) => {
+        setDetailHolding(h);
+        setDetailVisible(true);
+    };
+
+    const closeDetail = () => {
+        setDetailVisible(false);
+        setTimeout(() => setDetailHolding(null), 300);
+    };
+
+    const openInvestFor = (h: HoldingPerf | null) => {
+        if (h) {
+            const match = stocks.find(s => s.symbol === h.stock_symbol);
+            if (match) setSelectedStock(match);
+        }
+        setInvestModal(true);
+    };
 
     const handleInvest = async () => {
         const amt = parseFloat(investAmount);
@@ -101,7 +446,7 @@ export default function PortfolioScreen() {
         setInvesting(true);
         try {
             await portfolioApi.invest(selectedStock.symbol, amt);
-            setModalVisible(false); setInvestAmount("");
+            setInvestModal(false); setInvestAmount(""); setSelectedStock(null);
             fetchData(true);
             Alert.alert("✅ Invested!", `₹${amt.toFixed(2)} invested in ${selectedStock.symbol}.`);
         } catch (e: any) {
@@ -114,9 +459,8 @@ export default function PortfolioScreen() {
 
     return (
         <View style={s.container}>
-            <ScrollView
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.purple} />}
-            >
+            <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.purple} />}>
+
                 {/* Header */}
                 <View style={s.header}>
                     <View>
@@ -129,7 +473,7 @@ export default function PortfolioScreen() {
                             </View>
                         )}
                     </View>
-                    <TouchableOpacity style={s.investBtn} onPress={() => setModalVisible(true)}>
+                    <TouchableOpacity style={s.investBtn} onPress={() => setInvestModal(true)}>
                         <Ionicons name="add" size={18} color="#fff" />
                         <Text style={s.investBtnText}>Invest</Text>
                     </TouchableOpacity>
@@ -156,9 +500,7 @@ export default function PortfolioScreen() {
                                 <Text style={s.summaryValue}>₹{perf?.total_invested?.toFixed(2) ?? "0.00"}</Text>
                             </View>
                         </View>
-                        <View style={[s.plBadge, {
-                            backgroundColor: plPositive ? `${theme.green}20` : `${theme.red}20`
-                        }]}>
+                        <View style={[s.plBadge, { backgroundColor: plPositive ? `${theme.green}20` : `${theme.red}20` }]}>
                             <Ionicons name={plPositive ? "trending-up" : "trending-down"} size={16}
                                 color={plPositive ? theme.green : theme.red} />
                             <View>
@@ -166,7 +508,7 @@ export default function PortfolioScreen() {
                                     {plPositive ? "+" : ""}₹{perf?.total_profit_loss?.toFixed(2) ?? "0.00"}
                                     {" "}({perf?.total_profit_loss_pct?.toFixed(2) ?? "0.00"}%)
                                 </Text>
-                                <Text style={s.plSubtext}>Overall P&amp;L</Text>
+                                <Text style={s.plSubtext}>Overall P&L</Text>
                             </View>
                         </View>
                     </View>
@@ -180,46 +522,41 @@ export default function PortfolioScreen() {
                     <View style={s.emptyCard}>
                         <Ionicons name="bar-chart-outline" size={40} color={theme.border} />
                         <Text style={s.emptyText}>No holdings yet</Text>
-                        <Text style={s.emptySub}>Tap {"\"Invest\""} to buy your first stock</Text>
+                        <Text style={s.emptySub}>Tap "Invest" to buy your first stock</Text>
                     </View>
                 ) : (
                     perf.holdings.map((h: HoldingPerf) => {
                         const pos = h.profit_loss >= 0;
                         const plAbsPct = Math.abs(h.profit_loss_pct);
                         return (
-                            <View key={h.stock_symbol} style={s.holdingCard}>
-                                {/* Left: badge + name */}
+                            <TouchableOpacity
+                                key={h.stock_symbol}
+                                style={s.holdingCard}
+                                onPress={() => openDetail(h)}
+                                activeOpacity={0.72}
+                            >
+                                {/* Left */}
                                 <View style={s.holdingLeft}>
                                     <View style={s.holdingBadge}>
                                         <Text style={s.holdingSymbol}>{h.stock_symbol.slice(0, 4)}</Text>
                                     </View>
                                     <View style={{ flex: 1 }}>
                                         <Text style={s.holdingName}>{h.stock_name}</Text>
-                                        <Text style={s.holdingShares}>
-                                            {h.shares.toFixed(6)} shares
-                                        </Text>
-                                        {/* Live price row */}
+                                        <Text style={s.holdingShares}>{h.shares.toFixed(6)} shares</Text>
                                         <View style={s.livePriceRow}>
                                             <View style={[s.liveDot, { backgroundColor: "#22C55E" }]} />
-                                            <Text style={s.livePriceText}>
-                                                ₹{h.current_price.toFixed(2)} live
-                                            </Text>
-                                            <Text style={s.avgPriceText}>
-                                                · avg ₹{h.avg_buy_price.toFixed(2)}
-                                            </Text>
+                                            <Text style={s.livePriceText}>₹{h.current_price.toFixed(2)} live</Text>
+                                            <Text style={s.avgPriceText}>· avg ₹{h.avg_buy_price.toFixed(2)}</Text>
                                         </View>
                                     </View>
                                 </View>
 
-                                {/* Right: value + P&L */}
+                                {/* Right */}
                                 <View style={s.holdingRight}>
                                     <Text style={s.holdingValue}>₹{h.current_value.toFixed(2)}</Text>
                                     <View style={[s.plPill, { backgroundColor: pos ? `${theme.green}20` : `${theme.red}20` }]}>
-                                        <Ionicons
-                                            name={pos ? "arrow-up" : "arrow-down"}
-                                            size={10}
-                                            color={pos ? theme.green : theme.red}
-                                        />
+                                        <Ionicons name={pos ? "arrow-up" : "arrow-down"} size={10}
+                                            color={pos ? theme.green : theme.red} />
                                         <Text style={[s.holdingPL, { color: pos ? theme.green : theme.red }]}>
                                             {pos ? "+" : "-"}{plAbsPct.toFixed(2)}%
                                         </Text>
@@ -228,22 +565,34 @@ export default function PortfolioScreen() {
                                         {pos ? "+" : ""}₹{h.profit_loss.toFixed(2)}
                                     </Text>
                                 </View>
-                            </View>
+
+                                {/* Tap hint chevron */}
+                                <Ionicons name="chevron-forward" size={14} color={theme.muted} style={{ marginLeft: 4 }} />
+                            </TouchableOpacity>
                         );
                     })
                 )}
                 <View style={{ height: 40 }} />
             </ScrollView>
 
-            {/* Invest Modal */}
-            <Modal visible={modalVisible} transparent animationType="slide">
+            {/* ── Stock Detail Sheet ── */}
+            <StockDetailSheet
+                holding={detailHolding}
+                visible={detailVisible}
+                onClose={closeDetail}
+                theme={theme}
+                onInvestMore={openInvestFor}
+            />
+
+            {/* ── Invest Modal ── */}
+            <Modal visible={investModal} transparent animationType="slide">
                 <View style={s.overlay}>
                     <View style={s.modalCard}>
                         <View style={s.modalHeader}>
                             <Text style={s.modalTitle}>
                                 {selectedStock ? `Invest in ${selectedStock.symbol}` : "Choose a Stock"}
                             </Text>
-                            <TouchableOpacity onPress={() => { setModalVisible(false); setSelectedStock(null); setInvestAmount(""); }}>
+                            <TouchableOpacity onPress={() => { setInvestModal(false); setSelectedStock(null); setInvestAmount(""); }}>
                                 <Ionicons name="close" size={22} color={theme.muted} />
                             </TouchableOpacity>
                         </View>
@@ -314,6 +663,7 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
         liveText: { color: "#22C55E", fontSize: 10, fontWeight: "600" },
         investBtn: { flexDirection: "row", alignItems: "center", backgroundColor: t.purple, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, gap: 6 },
         investBtnText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+
         summaryCard: { margin: 20, marginTop: 0, backgroundColor: t.card, borderRadius: 20, padding: 22, borderWidth: 1, borderColor: t.border },
         summaryRow: { flexDirection: "row", marginBottom: 16 },
         summaryItem: { flex: 1 },
@@ -322,13 +672,14 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
         plBadge: { flexDirection: "row", alignItems: "center", padding: 12, borderRadius: 12, gap: 10 },
         plText: { fontWeight: "700", fontSize: 15 },
         plSubtext: { color: t.muted, fontSize: 10, marginTop: 1 },
+
         sectionTitle: { color: t.subtext, fontSize: 11, fontWeight: "700", letterSpacing: 1, paddingHorizontal: 20, marginBottom: 12 },
         emptyCard: { alignItems: "center", padding: 40 },
         emptyText: { color: t.muted, fontSize: 15, fontWeight: "600", marginTop: 12 },
         emptySub: { color: t.muted, fontSize: 12, marginTop: 4, opacity: 0.6 },
 
         holdingCard: {
-            flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+            flexDirection: "row", alignItems: "center",
             paddingHorizontal: 20, paddingVertical: 16,
             borderBottomWidth: 1, borderBottomColor: t.divider,
         },
@@ -363,5 +714,8 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
         sharesPreview: { color: t.muted, fontSize: 12, marginBottom: 16 },
         modalBtn: { backgroundColor: t.purple, borderRadius: 12, height: 52, justifyContent: "center", alignItems: "center", marginTop: 8 },
         modalBtnText: { color: "#fff", fontWeight: "700", fontSize: 16 },
+
+        green: { color: "#22C55E" },
+        red:   { color: "#EF4444" },
     });
 }

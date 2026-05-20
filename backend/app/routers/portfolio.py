@@ -241,7 +241,8 @@ def get_performance(
             invested_amount=h.invested_amount,
             current_value=curr_value,
             profit_loss=pl,
-            profit_loss_pct=pl_pct
+            profit_loss_pct=pl_pct,
+            invested_at=h.invested_at,
         ))
         total_invested += h.invested_amount
         total_current  += curr_value

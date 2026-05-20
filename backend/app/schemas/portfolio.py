@@ -31,6 +31,7 @@ class HoldingPerformanceOut(BaseModel):
     current_value: float
     profit_loss: float
     profit_loss_pct: float
+    invested_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
