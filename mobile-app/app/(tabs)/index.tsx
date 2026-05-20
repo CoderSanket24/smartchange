@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
-    RefreshControl, ActivityIndicator, TextInput,
+    RefreshControl, ActivityIndicator, TextInput, Modal,
+    Dimensions, StatusBar, SafeAreaView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
@@ -11,16 +12,16 @@ import { walletApi, portfolioApi } from "../../services/api";
 import { router } from "expo-router";
 
 // ── Stock chart — Lightweight Charts + backend yfinance endpoint ──────────────
-function StockChart({ symbol, height = 260 }: { symbol: string; height?: number }) {
-    const html = useMemo(() => {
-        const clean = symbol
-            .replace(/^(NSE:|BSE:)/i, "")
-            .replace(/\.(NS|BO)$/i, "")
-            .trim()
-            .toUpperCase();
-        const apiUrl = `http://172.168.3.112:8000/portfolio/stocks/${clean}/history`;
+function buildChartHtml(symbol: string, height: number, scrollEnabled: boolean) {
+    const clean = symbol
+        .replace(/^(NSE:|BSE:)/i, "")
+        .replace(/\.(NS|BO)$/i, "")
+        .trim()
+        .toUpperCase();
+    const apiUrl = `http://172.168.3.112:8000/portfolio/stocks/${clean}/history`;
+    const scroll = scrollEnabled ? "true" : "false";
 
-        return `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <style>
@@ -49,6 +50,7 @@ function StockChart({ symbol, height = 260 }: { symbol: string; height?: number 
 <script>
 (function() {
   var h = ${height};
+  var enableScroll = ${scroll};
   fetch('${apiUrl}')
     .then(function(r){ return r.json(); })
     .then(function(data) {
@@ -63,8 +65,8 @@ function StockChart({ symbol, height = 260 }: { symbol: string; height?: number 
         grid: { vertLines:{color:'#1F2937'}, horzLines:{color:'#1F2937'} },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         rightPriceScale: { borderColor:'#374151' },
-        timeScale: { borderColor:'#374151', timeVisible:false },
-        handleScroll: false, handleScale: false,
+        timeScale: { borderColor:'#374151', timeVisible:true },
+        handleScroll: enableScroll, handleScale: enableScroll,
       });
       var series = chart.addCandlestickSeries({
         upColor:'#22C55E', downColor:'#EF4444',
@@ -81,7 +83,10 @@ function StockChart({ symbol, height = 260 }: { symbol: string; height?: number 
 })();
 <\/script>
 </body></html>`;
-    }, [symbol, height]);
+}
+
+function StockChart({ symbol, height = 260, onFullscreen }: { symbol: string; height?: number; onFullscreen?: () => void }) {
+    const html = useMemo(() => buildChartHtml(symbol, height, false), [symbol, height]);
 
     return (
         <View style={{ height, borderRadius: 14, overflow: "hidden", marginTop: 12 }}>
@@ -94,7 +99,119 @@ function StockChart({ symbol, height = 260 }: { symbol: string; height?: number 
                 originWhitelist={["*"]}
                 mixedContentMode="always"
             />
+            {onFullscreen && (
+                <TouchableOpacity
+                    style={fsStyles.expandBtn}
+                    onPress={onFullscreen}
+                    activeOpacity={0.8}
+                >
+                    <Ionicons name="expand-outline" size={16} color="#fff" />
+                </TouchableOpacity>
+            )}
         </View>
+    );
+}
+
+const fsStyles = StyleSheet.create({
+    expandBtn: {
+        position: "absolute",
+        top: 20,
+        right: 10,
+        backgroundColor: "rgba(0,0,0,0.55)",
+        borderRadius: 8,
+        padding: 6,
+        zIndex: 10,
+    },
+    modalContainer: {
+        flex: 1,
+        backgroundColor: "#111827",
+    },
+    modalHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: "#111827",
+        borderBottomWidth: 1,
+        borderBottomColor: "#1F2937",
+    },
+    modalTitle: {
+        color: "#F59E0B",
+        fontSize: 15,
+        fontWeight: "700",
+        letterSpacing: 0.5,
+    },
+    modalCloseBtn: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        backgroundColor: "rgba(239,68,68,0.15)",
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderWidth: 1,
+        borderColor: "rgba(239,68,68,0.3)",
+    },
+    modalCloseText: {
+        color: "#EF4444",
+        fontSize: 12,
+        fontWeight: "700",
+    },
+});
+
+function FullscreenChartModal({
+    visible,
+    symbol,
+    onClose,
+}: {
+    visible: boolean;
+    symbol: string;
+    onClose: () => void;
+}) {
+    const { width, height } = Dimensions.get("window");
+    // Subtract header height (~56px) from chart height
+    const chartHeight = height - 56 - (StatusBar.currentHeight ?? 44);
+    const html = useMemo(
+        () => buildChartHtml(symbol, chartHeight, true),
+        [symbol, chartHeight]
+    );
+
+    const clean = symbol
+        .replace(/^(NSE:|BSE:)/i, "")
+        .replace(/\.(NS|BO)$/i, "")
+        .trim()
+        .toUpperCase();
+
+    return (
+        <Modal
+            visible={visible}
+            animationType="slide"
+            statusBarTranslucent
+            onRequestClose={onClose}
+        >
+            <SafeAreaView style={fsStyles.modalContainer}>
+                <View style={fsStyles.modalHeader}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Ionicons name="bar-chart" size={16} color="#F59E0B" />
+                        <Text style={fsStyles.modalTitle}>NSE:{clean}</Text>
+                    </View>
+                    <TouchableOpacity style={fsStyles.modalCloseBtn} onPress={onClose}>
+                        <Ionicons name="contract-outline" size={14} color="#EF4444" />
+                        <Text style={fsStyles.modalCloseText}>Close</Text>
+                    </TouchableOpacity>
+                </View>
+                <WebView
+                    source={{ html }}
+                    style={{ flex: 1, backgroundColor: "#111827" }}
+                    scrollEnabled={false}
+                    javaScriptEnabled
+                    domStorageEnabled
+                    originWhitelist={["*"]}
+                    mixedContentMode="always"
+                />
+            </SafeAreaView>
+        </Modal>
     );
 }
 
@@ -104,6 +221,7 @@ function StockChartExplorer({ theme }: { theme: any }) {
     const [input, setInput] = useState("");
     const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
     const [chartKey, setChartKey] = useState(0);
+    const [fullscreenSymbol, setFullscreenSymbol] = useState<string | null>(null);
 
     const popularStocks = [
         "RELIANCE", "TCS", "INFY", "HDFCBANK", "WIPRO",
@@ -186,16 +304,39 @@ function StockChartExplorer({ theme }: { theme: any }) {
                             <View style={[s2.liveDot, { backgroundColor: "#22C55E" }]} />
                             <Text style={[s2.chartSymbolText, { color: theme.text }]}>NSE:{activeSymbol}</Text>
                         </View>
-                        <TouchableOpacity
-                            style={s2.clearBtn}
-                            onPress={() => { setActiveSymbol(null); setInput(""); }}
-                        >
-                            <Ionicons name="close-circle-outline" size={15} color={theme.muted} />
-                            <Text style={[s2.clearText, { color: theme.muted }]}>Clear</Text>
-                        </TouchableOpacity>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                            <TouchableOpacity
+                                style={s2.fullscreenBtn}
+                                onPress={() => setFullscreenSymbol(activeSymbol)}
+                            >
+                                <Ionicons name="expand-outline" size={14} color={theme.amber} />
+                                <Text style={[s2.fullscreenText, { color: theme.amber }]}>Fullscreen</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={s2.clearBtn}
+                                onPress={() => { setActiveSymbol(null); setInput(""); }}
+                            >
+                                <Ionicons name="close-circle-outline" size={15} color={theme.muted} />
+                                <Text style={[s2.clearText, { color: theme.muted }]}>Clear</Text>
+                            </TouchableOpacity>
+                        </View>
                     </View>
-                    <StockChart key={`home-explorer-${chartKey}-${activeSymbol}`} symbol={activeSymbol} height={280} />
+                    <StockChart
+                        key={`home-explorer-${chartKey}-${activeSymbol}`}
+                        symbol={activeSymbol}
+                        height={280}
+                        onFullscreen={() => setFullscreenSymbol(activeSymbol)}
+                    />
                 </>
+            )}
+
+            {/* Fullscreen Modal */}
+            {fullscreenSymbol && (
+                <FullscreenChartModal
+                    visible={true}
+                    symbol={fullscreenSymbol}
+                    onClose={() => setFullscreenSymbol(null)}
+                />
             )}
         </View>
     );
@@ -228,6 +369,8 @@ const s2 = StyleSheet.create({
     chartSymbolText: { fontSize: 13, fontWeight: "700" },
     clearBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
     clearText: { fontSize: 11 },
+    fullscreenBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+    fullscreenText: { fontSize: 11, fontWeight: "600" },
 });
 
 // ── Home Screen ────────────────────────────────────────────────────────────────

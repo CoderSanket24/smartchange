@@ -1,5 +1,6 @@
 import time
 import logging
+import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
@@ -43,12 +44,27 @@ def startup_db():
         try:
             Base.metadata.create_all(bind=engine)
             logger.info("✅ Database tables created successfully.")
-            return
+            break
         except OperationalError:
             wait = 2 ** attempt
             logger.warning(f"⏳ DB not ready (attempt {attempt + 1}/{retries}), retrying in {wait}s…")
             time.sleep(wait)
-    raise RuntimeError("❌ Could not connect to database after multiple retries.")
+    else:
+        raise RuntimeError("❌ Could not connect to database after multiple retries.")
+
+    # Pre-warm the PPO model in a background thread so the first API request
+    # doesn't block. The model load + yfinance fetch takes ~5-15 s on cold start.
+    def _prewarm():
+        try:
+            logger.info("🔥 Pre-warming PPO model in background…")
+            from app.ai.rl_inference import _try_load_model
+            _try_load_model()
+            logger.info("✅ PPO model pre-warm complete.")
+        except Exception as exc:
+            logger.warning(f"⚠️  PPO pre-warm failed (non-fatal): {exc}")
+
+    t = threading.Thread(target=_prewarm, daemon=True, name="ppo-prewarm")
+    t.start()
 
 
 @app.get("/", tags=["Health"])

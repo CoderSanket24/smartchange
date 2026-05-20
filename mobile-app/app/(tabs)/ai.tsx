@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
-    RefreshControl, ActivityIndicator, TextInput, Alert,
-    Animated,
+    RefreshControl, ActivityIndicator, TextInput,
+    Animated, Modal, Dimensions, StatusBar, SafeAreaView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
@@ -34,17 +34,16 @@ interface Recommendation {
 interface AppNotification { type: string; title: string; body: string; icon: string; }
 
 // ── Stock chart — Lightweight Charts + backend yfinance endpoint ──────────────
-function StockChart({ symbol, height = 220 }: { symbol: string; height?: number }) {
-    const html = useMemo(() => {
-        const clean = symbol
-            .replace(/^(NSE:|BSE:)/i, "")
-            .replace(/\.(NS|BO)$/i, "")
-            .trim()
-            .toUpperCase();
-        // Fetch from our own backend — no CORS issues, real yfinance data
-        const apiUrl = `http://172.168.3.112:8000/portfolio/stocks/${clean}/history`;
+function buildChartHtml(symbol: string, height: number, scrollEnabled: boolean) {
+    const clean = symbol
+        .replace(/^(NSE:|BSE:)/i, "")
+        .replace(/\.(NS|BO)$/i, "")
+        .trim()
+        .toUpperCase();
+    const apiUrl = `http://172.168.3.112:8000/portfolio/stocks/${clean}/history`;
+    const scroll = scrollEnabled ? "true" : "false";
 
-        return `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <style>
@@ -73,6 +72,7 @@ function StockChart({ symbol, height = 220 }: { symbol: string; height?: number 
 <script>
 (function() {
   var h = ${height};
+  var enableScroll = ${scroll};
   fetch('${apiUrl}')
     .then(function(r){ return r.json(); })
     .then(function(data) {
@@ -87,8 +87,8 @@ function StockChart({ symbol, height = 220 }: { symbol: string; height?: number 
         grid: { vertLines:{color:'#1F2937'}, horzLines:{color:'#1F2937'} },
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
         rightPriceScale: { borderColor:'#374151' },
-        timeScale: { borderColor:'#374151', timeVisible:false },
-        handleScroll: false, handleScale: false,
+        timeScale: { borderColor:'#374151', timeVisible:true },
+        handleScroll: enableScroll, handleScale: enableScroll,
       });
       var series = chart.addCandlestickSeries({
         upColor:'#22C55E', downColor:'#EF4444',
@@ -105,7 +105,10 @@ function StockChart({ symbol, height = 220 }: { symbol: string; height?: number 
 })();
 <\/script>
 </body></html>`;
-    }, [symbol, height]);
+}
+
+function StockChart({ symbol, height = 220, onFullscreen }: { symbol: string; height?: number; onFullscreen?: () => void }) {
+    const html = useMemo(() => buildChartHtml(symbol, height, false), [symbol, height]);
 
     return (
         <View style={{ height, borderRadius: 12, overflow: "hidden", marginTop: 12 }}>
@@ -118,7 +121,117 @@ function StockChart({ symbol, height = 220 }: { symbol: string; height?: number 
                 originWhitelist={["*"]}
                 mixedContentMode="always"
             />
+            {onFullscreen && (
+                <TouchableOpacity
+                    style={fsStyles.expandBtn}
+                    onPress={onFullscreen}
+                    activeOpacity={0.8}
+                >
+                    <Ionicons name="expand-outline" size={16} color="#fff" />
+                </TouchableOpacity>
+            )}
         </View>
+    );
+}
+
+const fsStyles = StyleSheet.create({
+    expandBtn: {
+        position: "absolute",
+        top: 20,
+        right: 10,
+        backgroundColor: "rgba(0,0,0,0.55)",
+        borderRadius: 8,
+        padding: 6,
+        zIndex: 10,
+    },
+    modalContainer: {
+        flex: 1,
+        backgroundColor: "#111827",
+    },
+    modalHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: "#111827",
+        borderBottomWidth: 1,
+        borderBottomColor: "#1F2937",
+    },
+    modalTitle: {
+        color: "#F59E0B",
+        fontSize: 15,
+        fontWeight: "700",
+        letterSpacing: 0.5,
+    },
+    modalCloseBtn: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        backgroundColor: "rgba(239,68,68,0.15)",
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderWidth: 1,
+        borderColor: "rgba(239,68,68,0.3)",
+    },
+    modalCloseText: {
+        color: "#EF4444",
+        fontSize: 12,
+        fontWeight: "700",
+    },
+});
+
+function FullscreenChartModal({
+    visible,
+    symbol,
+    onClose,
+}: {
+    visible: boolean;
+    symbol: string;
+    onClose: () => void;
+}) {
+    const { height } = Dimensions.get("window");
+    const chartHeight = height - 56 - (StatusBar.currentHeight ?? 44);
+    const html = useMemo(
+        () => buildChartHtml(symbol, chartHeight, true),
+        [symbol, chartHeight]
+    );
+    const clean = symbol
+        .replace(/^(NSE:|BSE:)/i, "")
+        .replace(/\.(NS|BO)$/i, "")
+        .trim()
+        .toUpperCase();
+
+    return (
+        <Modal
+            visible={visible}
+            animationType="slide"
+            statusBarTranslucent
+            onRequestClose={onClose}
+        >
+            <SafeAreaView style={fsStyles.modalContainer}>
+                <View style={fsStyles.modalHeader}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Ionicons name="bar-chart" size={16} color="#F59E0B" />
+                        <Text style={fsStyles.modalTitle}>NSE:{clean}</Text>
+                    </View>
+                    <TouchableOpacity style={fsStyles.modalCloseBtn} onPress={onClose}>
+                        <Ionicons name="contract-outline" size={14} color="#EF4444" />
+                        <Text style={fsStyles.modalCloseText}>Close</Text>
+                    </TouchableOpacity>
+                </View>
+                <WebView
+                    source={{ html }}
+                    style={{ flex: 1, backgroundColor: "#111827" }}
+                    scrollEnabled={false}
+                    javaScriptEnabled
+                    domStorageEnabled
+                    originWhitelist={["*"]}
+                    mixedContentMode="always"
+                />
+            </SafeAreaView>
+        </Modal>
     );
 }
 
@@ -189,8 +302,10 @@ export default function AIScreen() {
     const [topN, setTopN] = useState("4");
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [chartVisible, setChartVisible] = useState<string | null>(null);
+    const [fullscreenSymbol, setFullscreenSymbol] = useState<string | null>(null);
     const [notifs, setNotifs] = useState<AppNotification[]>([]);
 
     const fetchNotifs = useCallback(async () => {
@@ -200,19 +315,41 @@ export default function AIScreen() {
         } catch { /* silent */ }
     }, []);
 
-    const fetchRecs = useCallback(async () => {
-        setLoading(true);
-        try {
-            const [aiRes, walRes] = await Promise.all([
-                aiApi.recommend(parseFloat(amount) || 100, parseInt(topN) || 4),
-                walletApi.balance(),
-            ]);
-            setMeta(aiRes.data);
-            setRecs(aiRes.data.recommendations);
-            setBalance(walRes.data.balance);
-        } catch (e: any) {
-            Alert.alert("Error", e?.response?.data?.detail ?? "Failed to fetch recommendations.");
-        } finally { setLoading(false); setRefreshing(false); }
+    const fetchRecs = useCallback(async (isRetry = false) => {
+        if (!isRetry) setLoading(true);
+        setError(null);
+        const MAX_RETRIES = 2;
+        const RETRY_DELAY_MS = 2500;
+
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                const [aiRes, walRes] = await Promise.all([
+                    aiApi.recommend(parseFloat(amount) || 100, parseInt(topN) || 4),
+                    walletApi.balance(),
+                ]);
+                setMeta(aiRes.data);
+                setRecs(aiRes.data.recommendations);
+                setBalance(walRes.data.balance);
+                setError(null);
+                setLoading(false);
+                setRefreshing(false);
+                return;   // success — exit loop
+            } catch (e: any) {
+                if (attempt < MAX_RETRIES) {
+                    // Wait and retry silently — backend may still be warming up
+                    await new Promise(res => setTimeout(res, RETRY_DELAY_MS));
+                } else {
+                    // All retries exhausted — show inline error
+                    const msg =
+                        e?.response?.data?.detail ??
+                        e?.message ??
+                        "Could not reach the server. Make sure the backend is running.";
+                    setError(msg);
+                    setLoading(false);
+                    setRefreshing(false);
+                }
+            }
+        }
     }, [amount, topN]);
 
     // Fetch recs when screen gains focus
@@ -264,12 +401,33 @@ export default function AIScreen() {
                 <Text style={s.walletNote}>
                     Wallet: <Text style={{ color: theme.accent }}>₹{balance.toFixed(2)}</Text>
                 </Text>
-                <TouchableOpacity style={s.runBtn} onPress={fetchRecs} disabled={loading}>
+                <TouchableOpacity style={s.runBtn} onPress={() => fetchRecs()} disabled={loading}>
                     {loading
                         ? <ActivityIndicator color="#000" />
                         : <><Ionicons name="sparkles" size={16} color="#000" /><Text style={s.runBtnText}>Run AI Analysis</Text></>}
                 </TouchableOpacity>
             </View>
+
+            {/* Inline Error Banner */}
+            {error && (
+                <View style={s.errorBanner}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                        <Ionicons name="wifi-outline" size={18} color="#EF4444" />
+                        <View style={{ flex: 1 }}>
+                            <Text style={s.errorTitle}>Connection Error</Text>
+                            <Text style={s.errorMsg} numberOfLines={2}>{error}</Text>
+                        </View>
+                    </View>
+                    <TouchableOpacity
+                        style={s.retryBtn}
+                        onPress={() => fetchRecs()}
+                        disabled={loading}
+                    >
+                        <Ionicons name="refresh-outline" size={13} color="#F59E0B" />
+                        <Text style={s.retryText}>Retry</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
 
             {/* Model Info */}
             {meta && (
@@ -395,7 +553,13 @@ export default function AIScreen() {
                         </View>
 
                         {/* Stock Chart (Lightweight Charts + Yahoo Finance) */}
-                        {showChart && <StockChart key={`rec-${rec.stock_symbol}`} symbol={nseSymbol} />}
+                        {showChart && (
+                            <StockChart
+                                key={`rec-${rec.stock_symbol}`}
+                                symbol={nseSymbol}
+                                onFullscreen={() => setFullscreenSymbol(nseSymbol)}
+                            />
+                        )}
 
                         {/* SHAP Explanation */}
                         {shapVals && isExpanded && (
@@ -425,7 +589,19 @@ export default function AIScreen() {
                     </View>
                 );
             })}
+            {recs.length === 0 && !loading && (
+                <Text style={{ color: theme.muted, textAlign: 'center', marginTop: 20 }}>Run AI Analysis to see recommendations.</Text>
+            )}
             <View style={{ height: 40 }} />
+
+            {/* Fullscreen Chart Modal */}
+            {fullscreenSymbol && (
+                <FullscreenChartModal
+                    visible={true}
+                    symbol={fullscreenSymbol}
+                    onClose={() => setFullscreenSymbol(null)}
+                />
+            )}
         </ScrollView>
     );
 }
@@ -485,5 +661,21 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
         shapFill: { height: "100%" as any, borderRadius: 3 },
         shapVal: { fontSize: 11, fontWeight: "600", width: 46, textAlign: "right" },
         shapNote: { color: t.muted, fontSize: 10, marginTop: 8, opacity: 0.7 },
+        errorBanner: {
+            marginHorizontal: 20, marginBottom: 16,
+            backgroundColor: "rgba(239,68,68,0.10)",
+            borderWidth: 1, borderColor: "rgba(239,68,68,0.30)",
+            borderRadius: 14, padding: 14,
+            flexDirection: "row", alignItems: "center", gap: 10,
+        },
+        errorTitle: { color: "#EF4444", fontWeight: "700", fontSize: 13, marginBottom: 2 },
+        errorMsg:   { color: t.subtext, fontSize: 11, lineHeight: 16 },
+        retryBtn: {
+            flexDirection: "row", alignItems: "center", gap: 4,
+            backgroundColor: `${t.amber}20`, borderRadius: 8,
+            paddingHorizontal: 10, paddingVertical: 7,
+            borderWidth: 1, borderColor: `${t.amber}40`,
+        },
+        retryText: { color: t.amber, fontSize: 11, fontWeight: "700" },
     });
 }

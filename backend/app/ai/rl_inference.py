@@ -166,38 +166,203 @@ def _simple_reason(info: dict) -> str:
     if sector:
         parts.append(f"{sector} sector stock")
     parts.append("equal-weight allocation")
-    return "; ".join(parts)
+    return ";".join(parts)
+
+
+# ── Signal-based scoring (replaces pure equal-weight when PPO is uniform) ─────
+def _compute_signal_scores(raw_close: pd.DataFrame, symbols: list) -> np.ndarray:
+    """
+    Compute a composite technical-signal score for each stock.
+    Score = 0.35 * momentum_score
+          + 0.30 * rsi_score        (lower RSI = oversold = higher score)
+          + 0.20 * trend_score      (price above SMA-14 = bullish)
+          + 0.15 * low_vol_score    (lower volatility = higher score)
+
+    All sub-scores are in [0, 1]. Returns a normalised weight array.
+    """
+    scores = np.zeros(len(symbols))
+    for i, sym in enumerate(symbols):
+        col = sym if sym in raw_close.columns else sym.replace(".NS", "")
+        if col not in raw_close.columns:
+            scores[i] = 1.0 / len(symbols)   # neutral fallback
+            continue
+        s = raw_close[col]
+
+        # ── Momentum: 5-day pct change, clipped to [-10%, +10%] ──────────────
+        mom5 = float(s.pct_change(5).iloc[-1]) if len(s) > 5 else 0.0
+        mom5 = float(np.clip(mom5, -0.10, 0.10))
+        mom_score = (mom5 + 0.10) / 0.20   # map [-0.10, +0.10] → [0, 1]
+
+        # ── RSI: oversold = high score, overbought = low score ────────────────
+        rsi_n = _rsi_norm(s)                 # already ∈ [0, 1]; low = overbought
+        rsi_score = 1.0 - rsi_n             # invert: low RSI val → high score (oversold)
+
+        # ── SMA trend: how far price is above/below 14-day SMA ───────────────
+        sma14_s = s.rolling(14).mean().dropna()
+        if len(sma14_s) > 0:
+            sma14 = float(sma14_s.iloc[-1])
+            cur   = float(s.iloc[-1])
+            trend_raw = (cur - sma14) / (sma14 + 1e-8)   # pct above SMA
+            trend_score = float(np.clip((trend_raw + 0.05) / 0.10, 0.0, 1.0))
+        else:
+            trend_score = 0.5
+
+        # ── Volatility: lower vol = more stable = higher score ───────────────
+        vol14_s = s.rolling(14).std().dropna()
+        if len(vol14_s) > 0:
+            vol_norm = float(vol14_s.iloc[-1] / (vol14_s.max() + 1e-8))
+        else:
+            vol_norm = 0.5
+        low_vol_score = 1.0 - vol_norm
+
+        scores[i] = (
+            0.35 * mom_score
+            + 0.30 * rsi_score
+            + 0.20 * trend_score
+            + 0.15 * low_vol_score
+        )
+
+    # Softmax to get a proper probability distribution
+    scores = np.clip(scores, 1e-6, None)
+    exp_s  = np.exp((scores - scores.mean()) * 5.0)   # temperature = 5
+    return exp_s / (exp_s.sum() + 1e-8)
+
+
+def _gini_coefficient(weights: np.ndarray) -> float:
+    """Gini coefficient as a measure of weight concentration (0 = equal, 1 = all in one)."""
+    w = np.sort(np.abs(weights))
+    n = len(w)
+    if n == 0 or w.sum() < 1e-10:
+        return 0.0
+    cum = np.cumsum(w)
+    return float((n + 1 - 2 * np.sum(cum) / (cum[-1] + 1e-10)) / n)
+
+
+def _differentiate_weights(
+    ppo_weights: np.ndarray,
+    raw_close: pd.DataFrame,
+    symbols: list,
+    blend_alpha: float = 0.55,
+) -> np.ndarray:
+    """
+    If PPO weights are nearly uniform (Gini < 0.08), blend in signal scores
+    so that allocations are meaningfully differentiated.
+
+    blend_alpha controls how much signal to mix in:
+      final = (1 - alpha) * ppo + alpha * signal
+    """
+    gini = _gini_coefficient(ppo_weights)
+    log.info(f"PPO weight Gini coefficient: {gini:.4f} (threshold: 0.08)")
+
+    if gini >= 0.08:   # PPO already differentiates — trust it
+        return ppo_weights
+
+    log.info(
+        f"PPO weights are near-uniform (Gini={gini:.4f}). "
+        f"Blending in technical signal scores (alpha={blend_alpha})."
+    )
+    signal_scores = _compute_signal_scores(raw_close, symbols)
+    blended = (1.0 - blend_alpha) * ppo_weights + blend_alpha * signal_scores
+    blended = np.clip(blended, 0.0, None)
+    w_sum = blended.sum()
+    if w_sum < 1e-6:
+        return ppo_weights
+    return blended / w_sum
 
 
 def _equal_weight_fallback(amount: float, top_n: int) -> dict:
+    """
+    Signal-weighted fallback when PPO model is not available.
+    Uses live yfinance data to rank stocks by technical signals.
+    Falls back to 1/N only if data cannot be fetched.
+    """
+    import yfinance as yf
     from app.routers.portfolio import STOCK_UNIVERSE
-    symbols = list(STOCK_UNIVERSE.keys())[:top_n]
-    w       = 1.0 / len(symbols)
-    ts      = datetime.now(timezone.utc).isoformat()
-    recs    = []
-    for i, sym in enumerate(symbols):
-        info = STOCK_UNIVERSE[sym]
+
+    univ_symbols = list(STOCK_UNIVERSE.keys())[:top_n * 2]  # fetch more, pick best top_n
+    yfin_syms    = [UNIVERSE_TO_YFINANCE.get(s, s) for s in univ_symbols]
+    tickers      = [s if s.endswith(".NS") else s + ".NS" for s in yfin_syms]
+    ts           = datetime.now(timezone.utc).isoformat()
+
+    weights: np.ndarray | None = None
+    raw_close: pd.DataFrame | None = None
+
+    try:
+        raw       = yf.download(tickers, period=LIVE_PERIOD, auto_adjust=True, progress=False)
+        raw_close = raw["Close"] if "Close" in raw.columns else raw
+        raw_close.columns = [c.replace(".NS", "") for c in raw_close.columns]
+        raw_close = raw_close.ffill().dropna()
+        if not raw_close.empty:
+            weights = _compute_signal_scores(raw_close, yfin_syms)
+    except Exception as e:
+        log.warning(f"Signal fallback data fetch failed: {e}. Using 1/N.")
+
+    if weights is None:
+        weights = np.ones(len(univ_symbols)) / len(univ_symbols)
+
+    # Apply temperature softmax to amplify differences
+    temp = 0.55
+    exp_w = np.exp(np.log(weights + 1e-9) / temp)
+    exp_w = exp_w / (exp_w.sum() + 1e-8)
+
+    # Pick top_n by weight
+    ranked_idx  = np.argsort(exp_w)[::-1][:top_n]
+    top_weights = exp_w[ranked_idx]
+    top_weights = top_weights / (top_weights.sum() + 1e-8)
+
+    recs = []
+    for rank_pos, idx in enumerate(ranked_idx):
+        univ_key = univ_symbols[idx]
+        yfin_sym = yfin_syms[idx]
+        info     = STOCK_UNIVERSE.get(univ_key, {"name": univ_key, "sector": "N/A", "price": 0.0})
+        alloc    = float(top_weights[rank_pos])
+        amt      = round(amount * alloc, 2)
+        pw       = round(float(exp_w[idx]), 4)
+
+        reason = _simple_reason(info)
+        if raw_close is not None:
+            col = yfin_sym if yfin_sym in raw_close.columns else yfin_sym.replace(".NS", "")
+            if col in raw_close.columns:
+                s   = raw_close[col]
+                m5  = float(s.pct_change(5).iloc[-1]) if len(s) > 5 else 0.0
+                rn  = _rsi_norm(s)
+                sma = s.rolling(14).mean().dropna()
+                sn  = float((sma.iloc[-1] - sma.min()) / (sma.max() - sma.min() + 1e-8)) if len(sma) else 0.5
+                vl  = s.rolling(14).std().dropna()
+                vn  = float(vl.iloc[-1] / (vl.max() + 1e-8)) if len(vl) else 0.5
+                reason = _decision_reason(0.0, sn, vn, rn, m5, alloc)
+
         recs.append({
-            "rank":             i + 1,
-            "stock_symbol":     UNIVERSE_TO_YFINANCE.get(sym, sym),
+            "rank":             rank_pos + 1,
+            "stock_symbol":     yfin_sym,
             "stock_name":       info["name"],
             "sector":           info.get("sector", "N/A"),
-            "current_price":    info["price"],
-            "allocation_pct":   round(w * 100, 2),
-            "suggested_amount": round(amount * w, 2),
-            "policy_weight":    round(w, 4),
-            "rationale":        f"Equal-weight fallback: 1/{len(symbols)} allocation.",
-            "reason":           _simple_reason(info),
-            "explanation":      {"method": "Equal-Weight (PPO not available)", "note": "Train the model at /ai/model-info"},
+            "current_price":    info.get("price", 0.0),
+            "allocation_pct":   round(alloc * 100, 2),
+            "suggested_amount": amt,
+            "policy_weight":    pw,
+            "rationale": (
+                f"Signal-weighted allocation: {alloc*100:.1f}% to {yfin_sym} "
+                f"based on momentum, RSI, SMA-14 trend, and volatility scoring."
+            ),
+            "reason":           reason,
+            "explanation":      {
+                "method": "Technical Signal Scoring (PPO not available)",
+                "note":   "Weighted by momentum, RSI, SMA trend, and volatility. Train PPO for RL-based allocation.",
+            },
         })
+
+    sector_exposure: dict[str, int] = {}
+    for rec in recs:
+        sector_exposure[rec["sector"]] = sector_exposure.get(rec["sector"], 0) + 1
+
     return {
-        "model":               "Equal-Weight (PPO model not available)",
-        "explanation_method":  "1/N uniform allocation",
+        "model":                 "Signal-Weighted (PPO model not available)",
+        "explanation_method":    "Technical Signal Scoring (Momentum + RSI + SMA + Volatility)",
         "market_data_timestamp": ts,
-        "portfolio_summary":   {
-            "n_assets": len(symbols),
-            "sector_exposure": {info["sector"]: 1 for s in symbols
-                                for info in [STOCK_UNIVERSE[s]] if "sector" in info},
+        "portfolio_summary": {
+            "n_assets":       len(recs),
+            "sector_exposure": sector_exposure,
         },
         "recommendations": recs,
     }
@@ -243,6 +408,9 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
     else:
         weights = weights / w_sum
 
+    # ── Differentiate near-uniform PPO weights with signal scores ─────────────
+    weights = _differentiate_weights(weights, raw_close, symbols)
+
     # ── Weights-sum validation ────────────────────────────────────────────
     assert abs(weights.sum() - 1.0) < 1e-4, f"Weights sum to {weights.sum():.6f}, not 1."
 
@@ -259,7 +427,29 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
 
     ranked_idx  = np.argsort(weights)[::-1][:top_n]
     top_weights = weights[ranked_idx]
-    top_weights = top_weights / (top_weights.sum() + 1e-8)   # re-normalise top-N
+
+    # ── Re-compute signal scores ONLY for the selected top-N stocks ────────────
+    # This ensures meaningful differentiation even if PPO was uniform across all 20.
+    top_syms = [symbols[i] for i in ranked_idx]
+    top_signal = _compute_signal_scores(raw_close, top_syms)
+
+    # Blend PPO weights with signal scores for the top-N set
+    top_ppo_norm = top_weights / (top_weights.sum() + 1e-8)
+    top_gini = _gini_coefficient(top_ppo_norm)
+    log.info(f"Top-{top_n} PPO Gini: {top_gini:.4f}")
+
+    if top_gini < 0.08:
+        blend_alpha = 0.60
+        log.info(f"Top-{top_n} weights near-uniform — blending signal scores (alpha={blend_alpha})")
+        top_weights_diff = (1.0 - blend_alpha) * top_ppo_norm + blend_alpha * top_signal
+    else:
+        top_weights_diff = top_ppo_norm
+
+    # ── Apply temperature sharpening to amplify differences ────────────────────
+    temp = 0.55   # < 1 sharpens (concentrates weight into leaders)
+    log_w = np.log(np.clip(top_weights_diff, 1e-9, None))
+    sharpened = np.exp(log_w / temp)
+    top_weights = sharpened / (sharpened.sum() + 1e-8)   # final normalised top-N weights
 
     recs = []
     sector_exposure: dict[str, int] = {}
@@ -276,7 +466,10 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
         univ_key  = YFINANCE_TO_UNIVERSE.get(sym, sym)
         info      = STOCK_UNIVERSE.get(univ_key, {"name": sym, "sector": "N/A", "price": 0.0})
         sector    = info.get("sector", "N/A")
-        pw        = round(float(weights[idx]), 4)
+        # policy_weight = final normalised allocation weight for this stock
+        pw        = round(alloc, 4)
+        # raw_ppo_weight = what the PPO network alone assigned (before signal blending)
+        raw_ppo_w = round(float(weights[idx]), 4)
 
         sector_exposure[sector] = sector_exposure.get(sector, 0) + 1
 
@@ -294,9 +487,9 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
                 m5   = float(s_series.pct_change(5).iloc[-1]) if len(s_series) > 5 else 0.0
                 reason = _decision_reason(lr, sn, vn, rn, m5, alloc)
             else:
-                reason = f"PPO allocates {alloc*100:.1f}% based on policy network weights."
+                reason = f"PPO + signals allocate {alloc*100:.1f}% based on policy network weights."
         except Exception:
-            reason = f"PPO allocates {alloc*100:.1f}% to {sym}."
+            reason = f"PPO + signals allocate {alloc*100:.1f}% to {sym}."
 
         recs.append({
             "rank":             rank + 1,
@@ -308,14 +501,15 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
             "suggested_amount": amt,
             "policy_weight":    pw,
             "rationale": (
-                f"PPO allocates {alloc*100:.1f}% to {sym} based on "
-                f"live log-returns, RSI, SMA-14, and momentum features."
+                f"PPO + signal scoring allocates {alloc*100:.1f}% to {sym} "
+                f"(raw PPO: {raw_ppo_w*100:.1f}%) — based on live RSI, SMA-14, and momentum."
             ),
             "reason":           reason,
             "explanation": {
-                "method":        "PPO MlpPolicy (deterministic=True)",
-                "policy_weight": pw,
-                "note":          "Use /ai/explain/{symbol} for live feature breakdown.",
+                "method":         "PPO MlpPolicy + Signal Scoring",
+                "policy_weight":  pw,
+                "raw_ppo_weight": raw_ppo_w,
+                "note":           "Use /ai/explain/{symbol} for live feature breakdown.",
             },
         })
 
