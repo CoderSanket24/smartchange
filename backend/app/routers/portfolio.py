@@ -87,9 +87,14 @@ def _get_live_price(symbol: str) -> float:
 
 @router.get("/stocks", tags=["Portfolio"])
 def list_available_stocks():
-    """Return all investable stocks in the virtual universe."""
+    """Return all investable stocks with live prices from yfinance."""
     return [
-        {"symbol": sym, "name": info["name"], "price": info["price"]}
+        {
+            "symbol": sym,
+            "name":   info["name"],
+            "sector": info.get("sector", "N/A"),
+            "price":  _get_live_price(sym),   # live price, not stale static
+        }
         for sym, info in STOCK_UNIVERSE.items()
     ]
 
@@ -159,20 +164,32 @@ def invest(
             detail=f"Insufficient wallet balance. Available: ₹{wallet.balance if wallet else 0:.2f}"
         )
 
-    current_price = STOCK_UNIVERSE[symbol]["price"]
+    # ── Use LIVE price (same source as performance endpoint) ─────────────────
+    # Using the static STOCK_UNIVERSE price would create a mismatch: shares
+    # would be bought at stale price but P&L calculated against live price,
+    # making the investment appear immediately profitable or in loss with no
+    # relation to actual price movement after the user's purchase.
+    current_price = _get_live_price(symbol)
+    if current_price <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not fetch live price for {symbol}. Please try again shortly."
+        )
+
     shares_bought = round(payload.amount / current_price, 6)
 
-    # Update or create holding (weighted average buy price)
+    # Update or create holding — weighted average buy price across top-ups
     holding = (
         db.query(Holding)
         .filter(Holding.user_id == current_user.id, Holding.stock_symbol == symbol)
         .first()
     )
     if holding:
+        # Weighted average: (old_invested + new_invested) / (old_shares + new_shares)
         total_invested = holding.invested_amount + payload.amount
-        total_shares = holding.shares + shares_bought
-        holding.avg_buy_price = round(total_invested / total_shares, 4)
-        holding.shares = round(total_shares, 6)
+        total_shares   = holding.shares + shares_bought
+        holding.avg_buy_price  = round(total_invested / total_shares, 4)
+        holding.shares         = round(total_shares, 6)
         holding.invested_amount = round(total_invested, 2)
     else:
         holding = Holding(
@@ -180,7 +197,7 @@ def invest(
             stock_symbol=symbol,
             stock_name=STOCK_UNIVERSE[symbol]["name"],
             shares=shares_bought,
-            avg_buy_price=current_price,
+            avg_buy_price=current_price,   # live price at time of purchase
             invested_amount=payload.amount
         )
         db.add(holding)
@@ -190,6 +207,7 @@ def invest(
     db.commit()
     db.refresh(holding)
     return holding
+
 
 
 @router.get("/holdings", response_model=List[HoldingOut])
