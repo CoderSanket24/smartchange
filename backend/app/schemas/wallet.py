@@ -9,6 +9,11 @@ class AddTransactionRequest(BaseModel):
     description: Optional[str] = None
 
 
+class AddMoneyRequest(BaseModel):
+    amount: float = Field(..., gt=0, description="Amount to add directly to wallet in ₹")
+    description: Optional[str] = None
+
+
 class WalletOut(BaseModel):
     id: int
     user_id: int

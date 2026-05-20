@@ -5,7 +5,7 @@ from typing import List
 from app.database import get_db
 from app.models.wallet import Wallet, Transaction
 from app.models.user import User
-from app.schemas.wallet import AddTransactionRequest, WalletOut, TransactionOut, WalletSummaryOut
+from app.schemas.wallet import AddTransactionRequest, AddMoneyRequest, WalletOut, TransactionOut, WalletSummaryOut
 from app.dependencies import get_current_user
 
 router = APIRouter(prefix="/wallet", tags=["Wallet"])
@@ -114,3 +114,34 @@ def get_summary(
         transaction_count=len(txns),
         transactions=txns
     )
+
+
+@router.post("/add-money", response_model=WalletOut, status_code=status.HTTP_200_OK)
+def add_money(
+    payload: AddMoneyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Directly credit money into the investment wallet (manual top-up).
+    Records a transaction with type='topup' for history.
+    """
+    amt = round(payload.amount, 2)
+
+    # Record a topup transaction (round_up = full amount, original = full amount)
+    txn = Transaction(
+        user_id=current_user.id,
+        original_amount=amt,
+        rounded_amount=amt,
+        round_up_amount=amt,
+        transaction_type="topup",
+        description=payload.description or "Manual Top-Up",
+    )
+    db.add(txn)
+
+    wallet = _get_or_create_wallet(current_user.id, db)
+    wallet.balance = round(wallet.balance + amt, 2)
+    db.commit()
+    db.refresh(wallet)
+    return wallet
+
