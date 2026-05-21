@@ -29,6 +29,7 @@ class TransactionOut(BaseModel):
     rounded_amount: float
     round_up_amount: float
     transaction_type: str
+    credited: int  # 0 = pending, 1 = credited
     description: Optional[str]
     created_at: datetime
 

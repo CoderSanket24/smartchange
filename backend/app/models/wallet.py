@@ -20,5 +20,6 @@ class Transaction(Base):
     rounded_amount = Column(Float, nullable=False)            # e.g. ₹48.00
     round_up_amount = Column(Float, nullable=False)           # e.g. ₹0.50 → invested
     transaction_type = Column(String, default="purchase")     # purchase | manual
+    credited = Column(Integer, default=0, nullable=False)     # 0 = pending, 1 = credited to wallet
     description = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

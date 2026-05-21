@@ -35,6 +35,8 @@ export const walletApi = {
   summary: () => API.get("/wallet/summary"),
   addTransaction: (amount: number, description?: string) =>
     API.post("/wallet/transaction", { amount, description, transaction_type: "purchase" }),
+  creditTransaction: (transactionId: number) =>
+    API.post(`/wallet/transaction/${transactionId}/credit`),
   addMoney: (amount: number, description?: string) =>
     API.post("/wallet/add-money", { amount, description }),
 };

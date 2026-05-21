@@ -17,6 +17,7 @@ interface Transaction {
     rounded_amount: number;
     round_up_amount: number;
     transaction_type: string;
+    credited: number;  // 0 = pending, 1 = credited
     description: string;
     created_at: string;
 }
@@ -238,27 +239,63 @@ export default function WalletScreen() {
         if (!val || val <= 0) return Alert.alert("Invalid", "Enter a valid amount.");
         setAddingSpend(true);
         try {
-            await walletApi.addTransaction(val, spendDesc || "Purchase");
+            const res = await walletApi.addTransaction(val, spendDesc || "Purchase");
+            const txn = res.data;
             setSpendModal(false); setSpendAmt(""); setSpendDesc("");
             fetchSummary();
+            
+            // Show suggestion to add round-up to wallet
+            Alert.alert(
+                "✅ Purchase Logged!",
+                `Round-up of ₹${txn.round_up_amount.toFixed(2)} is ready to be added to your wallet.\n\nCheck your transactions to add it.`,
+                [{ text: "Got it", style: "default" }]
+            );
         } catch (e: any) {
             Alert.alert("Error", e?.response?.data?.detail ?? "Failed to add transaction.");
         } finally { setAddingSpend(false); }
     };
 
+    const handleCreditTransaction = async (txn: Transaction) => {
+        Alert.alert(
+            "Add to Wallet?",
+            `Add ₹${txn.round_up_amount.toFixed(2)} round-up from this purchase to your investment wallet?`,
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Add to Wallet",
+                    style: "default",
+                    onPress: async () => {
+                        try {
+                            await walletApi.creditTransaction(txn.id);
+                            fetchSummary();
+                            Alert.alert("✅ Added!", `₹${txn.round_up_amount.toFixed(2)} added to your wallet.`);
+                        } catch (e: any) {
+                            Alert.alert("Error", e?.response?.data?.detail ?? "Failed to credit transaction.");
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     const roundUp = (val: string) => {
         const n = parseFloat(val);
         if (!n) return "—";
+        // Round to next whole rupee
         const rounded = Math.ceil(n);
-        const spare = (rounded === n ? rounded + 1 : rounded) - n;
-        return `₹${spare.toFixed(2)}`;
+        const spare = rounded - n;
+        // Add ₹1 to the spare change
+        const total = spare + 1.0;
+        return `₹${total.toFixed(2)}`;
     };
 
     const btnTextColor = theme.mode === "dark" ? "#000" : "#fff";
     const totalTopUps = summary?.transactions?.filter((t: Transaction) => t.transaction_type === "topup")
         .reduce((s: number, t: Transaction) => s + t.round_up_amount, 0) ?? 0;
-    const totalRoundUps = summary?.transactions?.filter((t: Transaction) => t.transaction_type !== "topup")
+    const totalRoundUps = summary?.transactions?.filter((t: Transaction) => t.transaction_type !== "topup" && t.credited === 1)
         .reduce((s: number, t: Transaction) => s + t.round_up_amount, 0) ?? 0;
+    const pendingTransactions = summary?.transactions?.filter((t: Transaction) => t.credited === 0 && t.transaction_type !== "topup") ?? [];
+    const totalPending = pendingTransactions.reduce((s: number, t: Transaction) => s + t.round_up_amount, 0);
 
     if (loading) {
         return <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: theme.bg }}>
@@ -271,24 +308,24 @@ export default function WalletScreen() {
             <ScrollView refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accent} />}>
 
                 {/* Header */}
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", padding: 24, paddingTop: 56 }}>
-                    <Text style={{ color: theme.text, fontSize: 24, fontWeight: "700" }}>Wallet</Text>
-                    <View style={{ flexDirection: "row", gap: 8 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 24, paddingTop: 56 }}>
+                    <Text style={{ color: theme.text, fontSize: 24, fontWeight: "700", flex: 1 }}>Wallet</Text>
+                    <View style={{ flexDirection: "row", gap: 8, flexShrink: 0 }}>
                         {/* Add Money Button */}
                         <TouchableOpacity
-                            style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#22C55E", borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, gap: 6 }}
+                            style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#22C55E", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 6 }}
                             onPress={() => setAddMoneyVisible(true)}
                         >
                             <Ionicons name="wallet-outline" size={16} color="#fff" />
-                            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>Add Money</Text>
+                            <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Add Money</Text>
                         </TouchableOpacity>
                         {/* Log Spend Button */}
                         <TouchableOpacity
-                            style={{ flexDirection: "row", alignItems: "center", backgroundColor: theme.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, gap: 6 }}
+                            style={{ flexDirection: "row", alignItems: "center", backgroundColor: theme.accent, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 6 }}
                             onPress={() => setSpendModal(true)}
                         >
                             <Ionicons name="add" size={16} color={btnTextColor} />
-                            <Text style={{ color: btnTextColor, fontWeight: "700", fontSize: 13 }}>Log Spend</Text>
+                            <Text style={{ color: btnTextColor, fontWeight: "700", fontSize: 12 }}>Log Spend</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -341,9 +378,27 @@ export default function WalletScreen() {
                 <View style={{ flexDirection: "row", marginHorizontal: 20, marginBottom: 20, backgroundColor: theme.accentDim, borderRadius: 12, padding: 14, gap: 10, borderWidth: 1, borderColor: theme.accentBorder, alignItems: "flex-start" }}>
                     <Ionicons name="information-circle-outline" size={16} color={theme.accent} />
                     <Text style={{ color: theme.subtext, fontSize: 12, flex: 1, lineHeight: 18 }}>
-                        Log purchases to auto round-up spare change, or add money directly to your investment wallet.
+                        Log purchases to round up to next ₹ + add ₹1 extra (e.g., ₹47.30 → ₹1.70 saved), or add money directly.
                     </Text>
                 </View>
+
+                {/* Pending Transactions Banner */}
+                {pendingTransactions.length > 0 && (
+                    <View style={{ marginHorizontal: 20, marginBottom: 20, backgroundColor: "#FFA50015", borderRadius: 12, padding: 14, borderWidth: 1, borderColor: "#FFA50030" }}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                            <Ionicons name="time-outline" size={18} color="#FFA500" />
+                            <Text style={{ color: "#FFA500", fontSize: 14, fontWeight: "700", flex: 1 }}>
+                                {pendingTransactions.length} Pending Round-Up{pendingTransactions.length > 1 ? "s" : ""}
+                            </Text>
+                            <Text style={{ color: "#FFA500", fontSize: 15, fontWeight: "800" }}>
+                                ₹{totalPending.toFixed(2)}
+                            </Text>
+                        </View>
+                        <Text style={{ color: theme.subtext, fontSize: 11, lineHeight: 16 }}>
+                            Tap "Add to Wallet" on any transaction below to credit the round-up to your investment balance.
+                        </Text>
+                    </View>
+                )}
 
                 {/* Transaction History */}
                 <Text style={{ color: theme.subtext, fontSize: 11, fontWeight: "700", letterSpacing: 1, paddingHorizontal: 20, marginBottom: 12 }}>
@@ -360,37 +415,73 @@ export default function WalletScreen() {
                     summary.transactions.map((txn: Transaction) => {
                         const cfg = txnConfig(txn.transaction_type, theme);
                         const isTopup = txn.transaction_type === "topup";
+                        const isPending = txn.credited === 0 && !isTopup;
+                        
                         return (
-                            <View key={txn.id} style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.divider }}>
-                                {/* Icon */}
-                                <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: cfg.bg, justifyContent: "center", alignItems: "center", marginRight: 14 }}>
-                                    <Ionicons name={cfg.icon as any} size={22} color={cfg.color} />
-                                </View>
-                                {/* Info */}
-                                <View style={{ flex: 1 }}>
-                                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                        <Text style={{ color: theme.text, fontSize: 14, fontWeight: "600" }}>
-                                            {txn.description || (isTopup ? "Manual Top-Up" : "Purchase")}
-                                        </Text>
-                                        <View style={{ backgroundColor: cfg.bg, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 }}>
-                                            <Text style={{ color: cfg.color, fontSize: 9, fontWeight: "700" }}>{cfg.label}</Text>
-                                        </View>
+                            <View key={txn.id} style={{ paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.divider }}>
+                                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                                    {/* Icon */}
+                                    <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: cfg.bg, justifyContent: "center", alignItems: "center", marginRight: 14 }}>
+                                        <Ionicons name={cfg.icon as any} size={22} color={cfg.color} />
                                     </View>
-                                    <Text style={{ color: theme.muted, fontSize: 11, marginTop: 2 }}>
-                                        {new Date(txn.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
-                                    </Text>
+                                    {/* Info */}
+                                    <View style={{ flex: 1 }}>
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                            <Text style={{ color: theme.text, fontSize: 14, fontWeight: "600" }}>
+                                                {txn.description || (isTopup ? "Manual Top-Up" : "Purchase")}
+                                            </Text>
+                                            <View style={{ backgroundColor: cfg.bg, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 }}>
+                                                <Text style={{ color: cfg.color, fontSize: 9, fontWeight: "700" }}>{cfg.label}</Text>
+                                            </View>
+                                            {isPending && (
+                                                <View style={{ backgroundColor: "#FFA50020", borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2 }}>
+                                                    <Text style={{ color: "#FFA500", fontSize: 9, fontWeight: "700" }}>PENDING</Text>
+                                                </View>
+                                            )}
+                                        </View>
+                                        <Text style={{ color: theme.muted, fontSize: 11, marginTop: 2 }}>
+                                            {new Date(txn.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                                        </Text>
+                                    </View>
+                                    {/* Amounts */}
+                                    <View style={{ alignItems: "flex-end" }}>
+                                        {isTopup ? (
+                                            <Text style={{ color: "#22C55E", fontSize: 15, fontWeight: "700" }}>+₹{txn.round_up_amount.toFixed(2)}</Text>
+                                        ) : (
+                                            <>
+                                                <Text style={{ color: theme.text, fontSize: 14, fontWeight: "600" }}>₹{txn.original_amount.toFixed(2)}</Text>
+                                                <Text style={{ color: isPending ? "#FFA500" : theme.accent, fontSize: 11, marginTop: 2 }}>
+                                                    {isPending ? "₹" : "+₹"}{txn.round_up_amount.toFixed(2)} {isPending ? "ready" : "saved"}
+                                                </Text>
+                                            </>
+                                        )}
+                                    </View>
                                 </View>
-                                {/* Amounts */}
-                                <View style={{ alignItems: "flex-end" }}>
-                                    {isTopup ? (
-                                        <Text style={{ color: "#22C55E", fontSize: 15, fontWeight: "700" }}>+₹{txn.round_up_amount.toFixed(2)}</Text>
-                                    ) : (
-                                        <>
-                                            <Text style={{ color: theme.text, fontSize: 14, fontWeight: "600" }}>₹{txn.original_amount.toFixed(2)}</Text>
-                                            <Text style={{ color: theme.accent, fontSize: 11, marginTop: 2 }}>+₹{txn.round_up_amount.toFixed(2)} saved</Text>
-                                        </>
-                                    )}
-                                </View>
+                                
+                                {/* Add to Wallet Button for Pending Transactions */}
+                                {isPending && (
+                                    <TouchableOpacity
+                                        style={{
+                                            marginTop: 10,
+                                            backgroundColor: `${theme.accent}15`,
+                                            borderRadius: 10,
+                                            paddingVertical: 10,
+                                            paddingHorizontal: 14,
+                                            flexDirection: "row",
+                                            alignItems: "center",
+                                            justifyContent: "center",
+                                            gap: 6,
+                                            borderWidth: 1,
+                                            borderColor: `${theme.accent}30`,
+                                        }}
+                                        onPress={() => handleCreditTransaction(txn)}
+                                    >
+                                        <Ionicons name="add-circle" size={16} color={theme.accent} />
+                                        <Text style={{ color: theme.accent, fontSize: 13, fontWeight: "700" }}>
+                                            Add ₹{txn.round_up_amount.toFixed(2)} to Wallet
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
                             </View>
                         );
                     })

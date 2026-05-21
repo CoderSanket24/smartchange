@@ -1,5 +1,6 @@
 import time
 import logging
+import math
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
@@ -73,7 +74,17 @@ def _get_live_price(symbol: str) -> float:
             # yfinance may return a Series when multi-level columns are present
             if hasattr(close_val, "iloc"):
                 close_val = close_val.iloc[0]
-            price = round(float(close_val), 2)
+            
+            # Convert to float and validate
+            price = float(close_val)
+            
+            # Safety check: ensure price is valid (not NaN, not inf, positive)
+            if math.isnan(price) or math.isinf(price) or price <= 0:
+                fallback = base_price if base_price > 0 else 100.0
+                log.warning(f"Invalid price {price} for {ticker}, using base price: {fallback}")
+                return fallback
+            
+            price = round(price, 2)
             _PRICE_CACHE[symbol] = (price, now)
             return price
     except Exception as exc:
@@ -88,15 +99,17 @@ def _get_live_price(symbol: str) -> float:
 @router.get("/stocks", tags=["Portfolio"])
 def list_available_stocks():
     """Return all investable stocks with live prices from yfinance."""
-    return [
-        {
+    stocks = []
+    for sym, info in STOCK_UNIVERSE.items():
+        price = _get_live_price(sym)  # Already returns valid price (base price if live fails)
+        
+        stocks.append({
             "symbol": sym,
             "name":   info["name"],
             "sector": info.get("sector", "N/A"),
-            "price":  _get_live_price(sym),   # live price, not stale static
-        }
-        for sym, info in STOCK_UNIVERSE.items()
-    ]
+            "price":  round(price, 2),
+        })
+    return stocks
 
 
 @router.get("/stocks/{symbol}/history", tags=["Portfolio"])
@@ -121,15 +134,34 @@ def get_stock_history(symbol: str, period: str = "6mo", interval: str = "1d"):
         candles = []
         for ts, row in df.iterrows():
             try:
+                # Extract values and check for NaN/inf
+                open_val = float(row["Open"])
+                high_val = float(row["High"])
+                low_val = float(row["Low"])
+                close_val = float(row["Close"])
+                
+                # Skip candles with invalid data
+                if (math.isnan(open_val) or math.isinf(open_val) or
+                    math.isnan(high_val) or math.isinf(high_val) or
+                    math.isnan(low_val) or math.isinf(low_val) or
+                    math.isnan(close_val) or math.isinf(close_val)):
+                    log.warning(f"Skipping candle with NaN/inf values for {ticker_sym} at {ts}")
+                    continue
+                
                 candles.append({
                     "time": int(ts.timestamp()),
-                    "open":  round(float(row["Open"]),  2),
-                    "high":  round(float(row["High"]),  2),
-                    "low":   round(float(row["Low"]),   2),
-                    "close": round(float(row["Close"]), 2),
+                    "open":  round(open_val, 2),
+                    "high":  round(high_val, 2),
+                    "low":   round(low_val, 2),
+                    "close": round(close_val, 2),
                 })
-            except Exception:
+            except Exception as e:
+                log.warning(f"Error processing candle for {ticker_sym} at {ts}: {e}")
                 continue
+        
+        if not candles:
+            raise HTTPException(status_code=404, detail=f"No valid data for {ticker_sym}")
+        
         return {"symbol": symbol.upper(), "candles": candles}
     except HTTPException:
         raise
@@ -170,13 +202,22 @@ def invest(
     # making the investment appear immediately profitable or in loss with no
     # relation to actual price movement after the user's purchase.
     current_price = _get_live_price(symbol)
-    if current_price <= 0:
+    
+    # Validate price is valid (not NaN, not inf, positive)
+    if math.isnan(current_price) or math.isinf(current_price) or current_price <= 0:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Could not fetch live price for {symbol}. Please try again shortly."
+            detail=f"Could not fetch valid price for {symbol}. Please try again shortly."
         )
 
     shares_bought = round(payload.amount / current_price, 6)
+    
+    # Validate shares_bought is valid
+    if math.isnan(shares_bought) or math.isinf(shares_bought) or shares_bought <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid calculation for shares. Please try again."
+        )
 
     # Update or create holding — weighted average buy price across top-ups
     holding = (
@@ -188,7 +229,16 @@ def invest(
         # Weighted average: (old_invested + new_invested) / (old_shares + new_shares)
         total_invested = holding.invested_amount + payload.amount
         total_shares   = holding.shares + shares_bought
-        holding.avg_buy_price  = round(total_invested / total_shares, 4)
+        avg_price = round(total_invested / total_shares, 4)
+        
+        # Validate all values before updating
+        if math.isnan(avg_price) or math.isinf(avg_price):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid price calculation. Please contact support."
+            )
+        
+        holding.avg_buy_price  = avg_price
         holding.shares         = round(total_shares, 6)
         holding.invested_amount = round(total_invested, 2)
     else:

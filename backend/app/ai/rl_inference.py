@@ -311,6 +311,8 @@ def _equal_weight_fallback(amount: float, top_n: int) -> dict:
     top_weights = top_weights / (top_weights.sum() + 1e-8)
 
     recs = []
+    from app.routers.portfolio import _get_live_price
+    
     for rank_pos, idx in enumerate(ranked_idx):
         univ_key = univ_symbols[idx]
         yfin_sym = yfin_syms[idx]
@@ -318,6 +320,9 @@ def _equal_weight_fallback(amount: float, top_n: int) -> dict:
         alloc    = float(top_weights[rank_pos])
         amt      = round(amount * alloc, 2)
         pw       = round(float(exp_w[idx]), 4)
+        
+        # Use consistent live price fetcher
+        live_price = _get_live_price(univ_key)
 
         reason = _simple_reason(info)
         if raw_close is not None:
@@ -337,7 +342,7 @@ def _equal_weight_fallback(amount: float, top_n: int) -> dict:
             "stock_symbol":     yfin_sym,
             "stock_name":       info["name"],
             "sector":           info.get("sector", "N/A"),
-            "current_price":    info.get("price", 0.0),
+            "current_price":    live_price,  # Use live price with NaN fallback
             "allocation_pct":   round(alloc * 100, 2),
             "suggested_amount": amt,
             "policy_weight":    pw,
@@ -466,6 +471,11 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
         univ_key  = YFINANCE_TO_UNIVERSE.get(sym, sym)
         info      = STOCK_UNIVERSE.get(univ_key, {"name": sym, "sector": "N/A", "price": 0.0})
         sector    = info.get("sector", "N/A")
+        
+        # Use the same live price fetcher as portfolio for consistency
+        from app.routers.portfolio import _get_live_price
+        live_price = _get_live_price(univ_key)
+        
         # policy_weight = final normalised allocation weight for this stock
         pw        = round(alloc, 4)
         # raw_ppo_weight = what the PPO network alone assigned (before signal blending)
@@ -496,7 +506,7 @@ def get_recommendations(amount: float, top_n: int = 4) -> dict:
             "stock_symbol":     sym,
             "stock_name":       info.get("name", sym),
             "sector":           sector,
-            "current_price":    info.get("price", 0.0),
+            "current_price":    live_price,  # Use live price with NaN fallback
             "allocation_pct":   round(alloc * 100, 2),
             "suggested_amount": amt,
             "policy_weight":    pw,
@@ -581,6 +591,11 @@ def get_stock_features(symbol: str) -> dict:
     reason = _decision_reason(log_ret, sma_norm, vol_norm, rsi_n, mom5,
                                policy_weight or 0.0)
 
+    # Use consistent live price fetcher with NaN fallback
+    from app.routers.portfolio import _get_live_price, YFINANCE_TO_UNIVERSE
+    univ_key = YFINANCE_TO_UNIVERSE.get(yfin_base, yfin_base)
+    live_price = _get_live_price(univ_key)
+
     return {
         "canonical_symbol":  yfin_base,       # always the yfinance name
         "log_return":        round(log_ret, 6),
@@ -592,7 +607,7 @@ def get_stock_features(symbol: str) -> dict:
         "momentum_5d":       round(mom5, 4),
         "policy_weight":     policy_weight,
         "decision_reason":   reason,
-        "close_price":       round(float(s.iloc[-1]), 2),
+        "close_price":       live_price,  # Use consistent price with NaN fallback
         "note": (
             "Features derived from live yfinance data using the same "
             "normalisation pipeline as the PPO training environment."

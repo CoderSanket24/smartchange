@@ -124,12 +124,21 @@ function StockDetailSheet({
 
     if (!holding) return null;
 
-    const isProfit   = holding.profit_loss >= 0;
+    // Add null safety for all holding properties
+    const profitLoss = holding.profit_loss ?? 0;
+    const profitLossPct = holding.profit_loss_pct ?? 0;
+    const currentPrice = holding.current_price ?? 0;
+    const avgBuyPrice = holding.avg_buy_price ?? 0;
+    const currentValue = holding.current_value ?? 0;
+    const investedAmount = holding.invested_amount ?? 0;
+    const shares = holding.shares ?? 0;
+
+    const isProfit   = profitLoss >= 0;
     const plColor    = isProfit ? "#22C55E" : "#EF4444";
     const plIcon     = isProfit ? "trending-up" : "trending-down";
-    const dayChange  = holding.current_price - holding.avg_buy_price;
-    const dayChangePct = holding.avg_buy_price > 0
-        ? ((dayChange / holding.avg_buy_price) * 100).toFixed(2)
+    const dayChange  = currentPrice - avgBuyPrice;
+    const dayChangePct = avgBuyPrice > 0
+        ? ((dayChange / avgBuyPrice) * 100).toFixed(2)
         : "0.00";
 
     const investedDate = holding.invested_at
@@ -138,8 +147,8 @@ function StockDetailSheet({
           })
         : "—";
 
-    const portfolioWeight = holding.invested_amount > 0
-        ? ((holding.current_value / holding.invested_amount) * 100 - 100).toFixed(2)
+    const portfolioWeight = investedAmount > 0
+        ? ((currentValue / investedAmount) * 100 - 100).toFixed(2)
         : "0.00";
 
     // Sector colour map
@@ -191,7 +200,7 @@ function StockDetailSheet({
                     <View>
                         <Text style={{ color: theme.muted, fontSize: 11, marginBottom: 2 }}>Current Price</Text>
                         <Text style={{ color: theme.text, fontSize: 28, fontWeight: "800" }}>
-                            ₹{holding.current_price.toFixed(2)}
+                            ₹{currentPrice.toFixed(2)}
                         </Text>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4 }}>
                             <Ionicons name={plIcon} size={14} color={plColor} />
@@ -204,11 +213,11 @@ function StockDetailSheet({
                     <View style={{ alignItems: "flex-end" }}>
                         <Text style={{ color: theme.muted, fontSize: 10, marginBottom: 2 }}>Your P&L</Text>
                         <Text style={{ color: plColor, fontSize: 20, fontWeight: "800" }}>
-                            {isProfit ? "+" : ""}₹{Math.abs(holding.profit_loss).toFixed(2)}
+                            {isProfit ? "+" : ""}₹{Math.abs(profitLoss).toFixed(2)}
                         </Text>
                         <View style={[detailStyles.plPill, { backgroundColor: `${plColor}22` }]}>
                             <Text style={{ color: plColor, fontSize: 12, fontWeight: "700" }}>
-                                {isProfit ? "+" : ""}{holding.profit_loss_pct.toFixed(2)}%
+                                {isProfit ? "+" : ""}{profitLossPct.toFixed(2)}%
                             </Text>
                         </View>
                     </View>
@@ -224,15 +233,15 @@ function StockDetailSheet({
                             <View style={{ flex: 1, gap: 16 }}>
                                 <View>
                                     <Text style={detailStyles.gridLabel}>Invested</Text>
-                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{holding.invested_amount.toFixed(2)}</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{investedAmount.toFixed(2)}</Text>
                                 </View>
                                 <View>
                                     <Text style={detailStyles.gridLabel}>Avg Buy Price</Text>
-                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{holding.avg_buy_price.toFixed(2)}</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{avgBuyPrice.toFixed(2)}</Text>
                                 </View>
                                 <View>
                                     <Text style={detailStyles.gridLabel}>Shares Held</Text>
-                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>{holding.shares.toFixed(6)}</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>{shares.toFixed(6)}</Text>
                                 </View>
                             </View>
 
@@ -243,13 +252,13 @@ function StockDetailSheet({
                             <View style={{ flex: 1, gap: 16 }}>
                                 <View>
                                     <Text style={detailStyles.gridLabel}>Current Value</Text>
-                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{holding.current_value.toFixed(2)}</Text>
+                                    <Text style={[detailStyles.gridValue, { color: theme.text }]}>₹{currentValue.toFixed(2)}</Text>
                                 </View>
                                 <View>
                                     <Text style={detailStyles.gridLabel}>Live Price</Text>
                                     <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                                         <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#22C55E" }} />
-                                        <Text style={[detailStyles.gridValue, { color: "#22C55E" }]}>₹{holding.current_price.toFixed(2)}</Text>
+                                        <Text style={[detailStyles.gridValue, { color: "#22C55E" }]}>₹{currentPrice.toFixed(2)}</Text>
                                     </View>
                                 </View>
                                 <View>
@@ -260,18 +269,18 @@ function StockDetailSheet({
                         </View>
 
                         {/* Bar chart */}
-                        <MiniBarChart invested={holding.invested_amount} current={holding.current_value} theme={theme} />
+                        <MiniBarChart invested={investedAmount} current={currentValue} theme={theme} />
                     </View>
 
                     {/* ── Returns Card ── */}
                     <View style={[detailStyles.statsCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
                         <Text style={[detailStyles.cardSectionTitle, { color: theme.subtext }]}>RETURNS BREAKDOWN</Text>
                         <StatRow label="Total P&L"
-                            value={`${isProfit ? "+" : ""}₹${holding.profit_loss.toFixed(2)}`}
+                            value={`${isProfit ? "+" : ""}₹{profitLoss.toFixed(2)}`}
                             valueColor={plColor} />
                         <View style={detailStyles.divider} />
                         <StatRow label="Return %"
-                            value={`${isProfit ? "+" : ""}${holding.profit_loss_pct.toFixed(2)}%`}
+                            value={`${isProfit ? "+" : ""}${profitLossPct.toFixed(2)}%`}
                             valueColor={plColor} />
                         <View style={detailStyles.divider} />
                         <StatRow label="Price Change vs Avg"
@@ -527,11 +536,11 @@ export default function PortfolioScreen() {
                         <View style={s.summaryRow}>
                             <View style={s.summaryItem}>
                                 <Text style={s.summaryLabel}>Current Value</Text>
-                                <Text style={s.summaryValue}>₹{perf?.current_value?.toFixed(2) ?? "0.00"}</Text>
+                                <Text style={s.summaryValue}>₹{(perf?.current_value ?? 0).toFixed(2)}</Text>
                             </View>
                             <View style={s.summaryItem}>
                                 <Text style={s.summaryLabel}>Total Invested</Text>
-                                <Text style={s.summaryValue}>₹{perf?.total_invested?.toFixed(2) ?? "0.00"}</Text>
+                                <Text style={s.summaryValue}>₹{(perf?.total_invested ?? 0).toFixed(2)}</Text>
                             </View>
                         </View>
                         <View style={[s.plBadge, { backgroundColor: plPositive ? `${theme.green}20` : `${theme.red}20` }]}>
@@ -539,8 +548,8 @@ export default function PortfolioScreen() {
                                 color={plPositive ? theme.green : theme.red} />
                             <View>
                                 <Text style={[s.plText, { color: plPositive ? theme.green : theme.red }]}>
-                                    {plPositive ? "+" : ""}₹{perf?.total_profit_loss?.toFixed(2) ?? "0.00"}
-                                    {" "}({perf?.total_profit_loss_pct?.toFixed(2) ?? "0.00"}%)
+                                    {plPositive ? "+" : ""}₹{(perf?.total_profit_loss ?? 0).toFixed(2)}
+                                    {" "}({(perf?.total_profit_loss_pct ?? 0).toFixed(2)}%)
                                 </Text>
                                 <Text style={s.plSubtext}>Overall P&L</Text>
                             </View>
@@ -560,8 +569,16 @@ export default function PortfolioScreen() {
                     </View>
                 ) : (
                     perf.holdings.map((h: HoldingPerf) => {
-                        const pos = h.profit_loss >= 0;
-                        const plAbsPct = Math.abs(h.profit_loss_pct);
+                        // Add null safety checks
+                        const profitLoss = h.profit_loss ?? 0;
+                        const profitLossPct = h.profit_loss_pct ?? 0;
+                        const currentPrice = h.current_price ?? 0;
+                        const avgBuyPrice = h.avg_buy_price ?? 0;
+                        const currentValue = h.current_value ?? 0;
+                        const shares = h.shares ?? 0;
+                        
+                        const pos = profitLoss >= 0;
+                        const plAbsPct = Math.abs(profitLossPct);
                         return (
                             <TouchableOpacity
                                 key={h.stock_symbol}
@@ -576,18 +593,18 @@ export default function PortfolioScreen() {
                                     </View>
                                     <View style={{ flex: 1 }}>
                                         <Text style={s.holdingName}>{h.stock_name}</Text>
-                                        <Text style={s.holdingShares}>{h.shares.toFixed(6)} shares</Text>
+                                        <Text style={s.holdingShares}>{shares.toFixed(6)} shares</Text>
                                         <View style={s.livePriceRow}>
                                             <View style={[s.liveDot, { backgroundColor: "#22C55E" }]} />
-                                            <Text style={s.livePriceText}>₹{h.current_price.toFixed(2)} live</Text>
-                                            <Text style={s.avgPriceText}>· avg ₹{h.avg_buy_price.toFixed(2)}</Text>
+                                            <Text style={s.livePriceText}>₹{currentPrice.toFixed(2)} live</Text>
+                                            <Text style={s.avgPriceText}>· avg ₹{avgBuyPrice.toFixed(2)}</Text>
                                         </View>
                                     </View>
                                 </View>
 
                                 {/* Right */}
                                 <View style={s.holdingRight}>
-                                    <Text style={s.holdingValue}>₹{h.current_value.toFixed(2)}</Text>
+                                    <Text style={s.holdingValue}>₹{currentValue.toFixed(2)}</Text>
                                     <View style={[s.plPill, { backgroundColor: pos ? `${theme.green}20` : `${theme.red}20` }]}>
                                         <Ionicons name={pos ? "arrow-up" : "arrow-down"} size={10}
                                             color={pos ? theme.green : theme.red} />
@@ -596,7 +613,7 @@ export default function PortfolioScreen() {
                                         </Text>
                                     </View>
                                     <Text style={[s.holdingPLAbs, { color: pos ? theme.green : theme.red }]}>
-                                        {pos ? "+" : ""}₹{h.profit_loss.toFixed(2)}
+                                        {pos ? "+" : ""}₹{profitLoss.toFixed(2)}
                                     </Text>
                                 </View>
 
@@ -703,15 +720,15 @@ export default function PortfolioScreen() {
                                 <View style={[s.summaryCard, { marginBottom: 16, padding: 16 }]}>
                                     <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
                                         <Text style={s.label}>Available Shares</Text>
-                                        <Text style={[s.stockName, { color: theme.text }]}>{sellHolding.shares.toFixed(6)}</Text>
+                                        <Text style={[s.stockName, { color: theme.text }]}>{(sellHolding.shares ?? 0).toFixed(6)}</Text>
                                     </View>
                                     <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 8 }}>
                                         <Text style={s.label}>Current Price</Text>
-                                        <Text style={[s.stockName, { color: theme.green }]}>₹{sellHolding.current_price.toFixed(2)}</Text>
+                                        <Text style={[s.stockName, { color: theme.green }]}>₹{(sellHolding.current_price ?? 0).toFixed(2)}</Text>
                                     </View>
                                     <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                                         <Text style={s.label}>Avg Buy Price</Text>
-                                        <Text style={[s.stockName, { color: theme.muted }]}>₹{sellHolding.avg_buy_price.toFixed(2)}</Text>
+                                        <Text style={[s.stockName, { color: theme.muted }]}>₹{(sellHolding.avg_buy_price ?? 0).toFixed(2)}</Text>
                                     </View>
                                 </View>
 
@@ -728,25 +745,25 @@ export default function PortfolioScreen() {
                                 <View style={{ flexDirection: "row", gap: 8, marginBottom: 16 }}>
                                     <TouchableOpacity 
                                         style={[s.quickBtn, { backgroundColor: `${theme.purple}15` }]}
-                                        onPress={() => setSellShares((sellHolding.shares * 0.25).toFixed(6))}
+                                        onPress={() => setSellShares(((sellHolding.shares ?? 0) * 0.25).toFixed(6))}
                                     >
                                         <Text style={[s.quickBtnText, { color: theme.purple }]}>25%</Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity 
                                         style={[s.quickBtn, { backgroundColor: `${theme.purple}15` }]}
-                                        onPress={() => setSellShares((sellHolding.shares * 0.5).toFixed(6))}
+                                        onPress={() => setSellShares(((sellHolding.shares ?? 0) * 0.5).toFixed(6))}
                                     >
                                         <Text style={[s.quickBtnText, { color: theme.purple }]}>50%</Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity 
                                         style={[s.quickBtn, { backgroundColor: `${theme.purple}15` }]}
-                                        onPress={() => setSellShares((sellHolding.shares * 0.75).toFixed(6))}
+                                        onPress={() => setSellShares(((sellHolding.shares ?? 0) * 0.75).toFixed(6))}
                                     >
                                         <Text style={[s.quickBtnText, { color: theme.purple }]}>75%</Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity 
                                         style={[s.quickBtn, { backgroundColor: `${theme.red}15` }]}
-                                        onPress={() => setSellShares(sellHolding.shares.toFixed(6))}
+                                        onPress={() => setSellShares((sellHolding.shares ?? 0).toFixed(6))}
                                     >
                                         <Text style={[s.quickBtnText, { color: theme.red }]}>All</Text>
                                     </TouchableOpacity>
@@ -758,17 +775,17 @@ export default function PortfolioScreen() {
                                         <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
                                             <Text style={s.stockPrice}>Sale Amount</Text>
                                             <Text style={[s.stockName, { color: theme.text }]}>
-                                                ₹{(parseFloat(sellShares) * sellHolding.current_price).toFixed(2)}
+                                                ₹{(parseFloat(sellShares) * (sellHolding.current_price ?? 0)).toFixed(2)}
                                             </Text>
                                         </View>
                                         <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                                             <Text style={s.stockPrice}>Est. P&L</Text>
                                             <Text style={[s.stockName, { 
-                                                color: (parseFloat(sellShares) * (sellHolding.current_price - sellHolding.avg_buy_price)) >= 0 
+                                                color: (parseFloat(sellShares) * ((sellHolding.current_price ?? 0) - (sellHolding.avg_buy_price ?? 0))) >= 0 
                                                     ? theme.green : theme.red 
                                             }]}>
-                                                {(parseFloat(sellShares) * (sellHolding.current_price - sellHolding.avg_buy_price)) >= 0 ? '+' : ''}
-                                                ₹{(parseFloat(sellShares) * (sellHolding.current_price - sellHolding.avg_buy_price)).toFixed(2)}
+                                                {(parseFloat(sellShares) * ((sellHolding.current_price ?? 0) - (sellHolding.avg_buy_price ?? 0))) >= 0 ? '+' : ''}
+                                                ₹{(parseFloat(sellShares) * ((sellHolding.current_price ?? 0) - (sellHolding.avg_buy_price ?? 0))).toFixed(2)}
                                             </Text>
                                         </View>
                                     </View>
