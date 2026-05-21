@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity,
     RefreshControl, ActivityIndicator, TextInput, Modal,
-    Dimensions, StatusBar, SafeAreaView,
+    Dimensions, StatusBar, SafeAreaView, Animated, Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { WebView } from "react-native-webview";
@@ -216,7 +216,209 @@ function FullscreenChartModal({
 }
 
 
-// ── Stock Chart Explorer ───────────────────────────────────────────────────────
+// ── Animated Stat Card ─────────────────────────────────────────────────────────
+function AnimatedStatCard({ 
+    icon, 
+    value, 
+    label, 
+    color, 
+    delay = 0,
+    theme 
+}: { 
+    icon: string; 
+    value: string; 
+    label: string; 
+    color: string; 
+    delay?: number;
+    theme: any;
+}) {
+    const scaleAnim = useRef(new Animated.Value(0)).current;
+    const fadeAnim = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        Animated.parallel([
+            Animated.spring(scaleAnim, {
+                toValue: 1,
+                delay,
+                tension: 50,
+                friction: 7,
+                useNativeDriver: true,
+            }),
+            Animated.timing(fadeAnim, {
+                toValue: 1,
+                delay,
+                duration: 400,
+                useNativeDriver: true,
+            }),
+        ]).start();
+    }, []);
+
+    return (
+        <Animated.View
+            style={[
+                {
+                    flex: 1,
+                    backgroundColor: theme.card,
+                    borderRadius: 18,
+                    padding: 16,
+                    borderWidth: 1,
+                    borderColor: theme.border,
+                    alignItems: 'center',
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.05,
+                    shadowRadius: 8,
+                    elevation: 2,
+                },
+                {
+                    transform: [{ scale: scaleAnim }],
+                    opacity: fadeAnim,
+                },
+            ]}
+        >
+            <View style={{
+                width: 44,
+                height: 44,
+                borderRadius: 12,
+                justifyContent: 'center',
+                alignItems: 'center',
+                marginBottom: 10,
+                backgroundColor: `${color}15`,
+            }}>
+                <Ionicons name={icon as any} size={24} color={color} />
+            </View>
+            <Text style={{ color: theme.text, fontSize: 18, fontWeight: '800', marginBottom: 4 }}>{value}</Text>
+            <Text style={{ color: theme.muted, fontSize: 11, fontWeight: '600' }}>{label}</Text>
+        </Animated.View>
+    );
+}
+
+// ── Animated Action Button ─────────────────────────────────────────────────────
+function AnimatedActionButton({
+    icon,
+    label,
+    color,
+    route,
+    delay = 0,
+    theme,
+}: {
+    icon: string;
+    label: string;
+    color: string;
+    route: string;
+    delay?: number;
+    theme: any;
+}) {
+    const scaleAnim = useRef(new Animated.Value(0)).current;
+    const [pressed, setPressed] = useState(false);
+
+    useEffect(() => {
+        Animated.spring(scaleAnim, {
+            toValue: 1,
+            delay,
+            tension: 50,
+            friction: 7,
+            useNativeDriver: true,
+        }).start();
+    }, []);
+
+    const handlePressIn = () => {
+        setPressed(true);
+        Animated.spring(scaleAnim, {
+            toValue: 0.92,
+            useNativeDriver: true,
+        }).start();
+    };
+
+    const handlePressOut = () => {
+        setPressed(false);
+        Animated.spring(scaleAnim, {
+            toValue: 1,
+            tension: 50,
+            friction: 7,
+            useNativeDriver: true,
+        }).start();
+    };
+
+    return (
+        <TouchableOpacity
+            onPressIn={handlePressIn}
+            onPressOut={handlePressOut}
+            onPress={() => router.push(route as any)}
+            activeOpacity={1}
+        >
+            <Animated.View
+                style={[
+                    {
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        padding: 18,
+                        borderRadius: 18,
+                        borderWidth: 1,
+                        backgroundColor: theme.card,
+                        borderColor: theme.border,
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.05,
+                        shadowRadius: 8,
+                        elevation: 2,
+                    },
+                    {
+                        transform: [{ scale: scaleAnim }],
+                    },
+                ]}
+            >
+                <View style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 14,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    marginRight: 14,
+                    backgroundColor: `${color}18`,
+                }}>
+                    <Ionicons name={icon as any} size={26} color={color} />
+                </View>
+                <Text style={{ flex: 1, fontSize: 15, fontWeight: '700', color: theme.text }}>{label}</Text>
+                <Ionicons name="arrow-forward" size={14} color={theme.muted} />
+            </Animated.View>
+        </TouchableOpacity>
+    );
+}
+
+// ── Pulsing Dot ────────────────────────────────────────────────────────────────
+function PulsingDot({ color }: { color: string }) {
+    const pulseAnim = useRef(new Animated.Value(1)).current;
+
+    useEffect(() => {
+        Animated.loop(
+            Animated.sequence([
+                Animated.timing(pulseAnim, {
+                    toValue: 1.3,
+                    duration: 1000,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(pulseAnim, {
+                    toValue: 1,
+                    duration: 1000,
+                    useNativeDriver: true,
+                }),
+            ])
+        ).start();
+    }, []);
+
+    return (
+        <Animated.View
+            style={{
+                width: 8,
+                height: 8,
+                borderRadius: 4,
+                backgroundColor: color,
+                transform: [{ scale: pulseAnim }],
+            }}
+        />
+    );
+}
 function StockChartExplorer({ theme }: { theme: any }) {
     const [input, setInput] = useState("");
     const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
@@ -343,7 +545,7 @@ function StockChartExplorer({ theme }: { theme: any }) {
 }
 
 const s2 = StyleSheet.create({
-    card: { margin: 20, marginTop: 0, borderRadius: 18, padding: 18, borderWidth: 1 },
+    card: { marginTop: 0, marginBottom: 0, borderRadius: 18, padding: 18, borderWidth: 1 },
     sectionHeader: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16 },
     iconWrap: { width: 36, height: 36, borderRadius: 10, justifyContent: "center", alignItems: "center" },
     cardTitle: { fontSize: 15, fontWeight: "700" },
@@ -380,8 +582,12 @@ export default function HomeScreen() {
     const [balance, setBalance] = useState<number>(0);
     const [portfolioValue, setPortfolioValue] = useState<number>(0);
     const [totalPL, setTotalPL] = useState<number>(0);
+    const [totalInvested, setTotalInvested] = useState<number>(0);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+
+    const headerFadeAnim = useRef(new Animated.Value(0)).current;
+    const heroScaleAnim = useRef(new Animated.Value(0.9)).current;
 
     const fetchData = useCallback(async () => {
         try {
@@ -392,105 +598,218 @@ export default function HomeScreen() {
             setBalance(walletRes.data.balance);
             setPortfolioValue(perfRes.data.current_value ?? 0);
             setTotalPL(perfRes.data.total_profit_loss ?? 0);
+            setTotalInvested(perfRes.data.total_invested ?? 0);
         } catch { /* silently fail */ }
         finally { setLoading(false); setRefreshing(false); }
     }, []);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => { 
+        fetchData();
+        // Animate header on mount
+        Animated.parallel([
+            Animated.timing(headerFadeAnim, {
+                toValue: 1,
+                duration: 600,
+                useNativeDriver: true,
+            }),
+            Animated.spring(heroScaleAnim, {
+                toValue: 1,
+                tension: 50,
+                friction: 7,
+                useNativeDriver: true,
+            }),
+        ]).start();
+    }, [fetchData]);
+
     const onRefresh = () => { setRefreshing(true); fetchData(); };
     const plPositive = totalPL >= 0;
+    const plPercentage = totalInvested > 0 ? ((totalPL / totalInvested) * 100).toFixed(2) : "0.00";
 
     const s = makeStyles(theme);
 
+    const getGreeting = () => {
+        const hour = new Date().getHours();
+        if (hour < 12) return "Good morning";
+        if (hour < 17) return "Good afternoon";
+        return "Good evening";
+    };
+
     if (loading) {
-        return <View style={s.center}><ActivityIndicator size="large" color={theme.accent} /></View>;
+        return (
+            <View style={s.center}>
+                <ActivityIndicator size="large" color={theme.accent} />
+                <Text style={[s.loadingText, { color: theme.muted }]}>Loading your portfolio...</Text>
+            </View>
+        );
     }
 
     return (
-        <ScrollView style={s.container}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accent} />}>
-
-            {/* Header */}
-            <View style={s.header}>
+        <ScrollView 
+            style={s.container}
+            showsVerticalScrollIndicator={false}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accent} />}
+        >
+            {/* Animated Header */}
+            <Animated.View style={[s.header, { opacity: headerFadeAnim }]}>
                 <View>
-                    <Text style={s.greeting}>Good evening 👋</Text>
+                    <Text style={s.greeting}>{getGreeting()} 👋</Text>
                     <Text style={s.username}>{user?.username}</Text>
                 </View>
                 <View style={{ flexDirection: "row", gap: 10, alignItems: "center" }}>
                     <TouchableOpacity onPress={toggle} style={s.iconBtn}>
-                        <Ionicons name={isDark ? "sunny-outline" : "moon-outline"} size={18} color={theme.accent} />
+                        <Ionicons name={isDark ? "sunny" : "moon"} size={20} color={theme.accent} />
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={logout} style={s.iconBtn}>
-                        <Ionicons name="log-out-outline" size={18} color={theme.muted} />
+                    <TouchableOpacity onPress={logout} style={[s.iconBtn, { backgroundColor: `${theme.red}15`, borderColor: `${theme.red}30` }]}>
+                        <Ionicons name="log-out-outline" size={20} color={theme.red} />
                     </TouchableOpacity>
                 </View>
-            </View>
+            </Animated.View>
 
-            {/* Balance Hero Card */}
-            <View style={s.heroCard}>
-                <Text style={s.heroLabel}>Investment Wallet</Text>
-                <Text style={s.heroAmount}>₹{balance.toFixed(2)}</Text>
-                <View style={s.heroBadge}>
-                    <Ionicons name="shield-checkmark" size={12} color={theme.accent} />
-                    <Text style={s.heroBadgeText}>Virtual portfolio · Protected</Text>
+            {/* Hero Balance Card with Gradient */}
+            <Animated.View style={{ transform: [{ scale: heroScaleAnim }] }}>
+                <View style={[s.heroCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                    <View style={s.heroTop}>
+                        <View>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                                <PulsingDot color={theme.green} />
+                                <Text style={[s.heroLabel, { color: theme.muted }]}>Investment Wallet</Text>
+                            </View>
+                            <Text style={[s.heroAmount, { color: theme.accent }]}>₹{balance.toFixed(2)}</Text>
+                        </View>
+                        <View style={[s.heroBadge, { backgroundColor: `${theme.accent}15`, borderColor: `${theme.accent}30` }]}>
+                            <Ionicons name="shield-checkmark" size={16} color={theme.accent} />
+                        </View>
+                    </View>
+                    
+                    <View style={[s.heroStats, { backgroundColor: theme.inputBg, borderColor: theme.border }]}>
+                        <View style={s.heroStatItem}>
+                            <Text style={[s.heroStatLabel, { color: theme.muted }]}>Portfolio</Text>
+                            <Text style={[s.heroStatValue, { color: theme.text }]}>₹{portfolioValue.toFixed(2)}</Text>
+                        </View>
+                        <View style={[s.heroStatDivider, { backgroundColor: theme.border }]} />
+                        <View style={s.heroStatItem}>
+                            <Text style={[s.heroStatLabel, { color: theme.muted }]}>Returns</Text>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <Ionicons 
+                                    name={plPositive ? "trending-up" : "trending-down"} 
+                                    size={14} 
+                                    color={plPositive ? theme.green : theme.red} 
+                                />
+                                <Text style={[s.heroStatValue, { color: plPositive ? theme.green : theme.red }]}>
+                                    {plPositive ? "+" : ""}{plPercentage}%
+                                </Text>
+                            </View>
+                        </View>
+                    </View>
                 </View>
-            </View>
+            </Animated.View>
 
-            {/* Stats Row */}
-            <View style={s.statsRow}>
-                <View style={[s.statCard, { flex: 1, marginRight: 8 }]}>
-                    <Ionicons name="bar-chart-outline" size={20} color={theme.purple} />
-                    <Text style={s.statValue}>₹{portfolioValue.toFixed(2)}</Text>
-                    <Text style={s.statLabel}>Portfolio Value</Text>
-                </View>
-                <View style={[s.statCard, { flex: 1 }]}>
-                    <Ionicons name={plPositive ? "trending-up" : "trending-down"} size={20}
-                        color={plPositive ? theme.green : theme.red} />
-                    <Text style={[s.statValue, { color: plPositive ? theme.green : theme.red }]}>
-                        {plPositive ? "+" : ""}₹{totalPL.toFixed(2)}
-                    </Text>
-                    <Text style={s.statLabel}>Total P&L</Text>
-                </View>
+            {/* Stats Grid */}
+            <View style={s.statsGrid}>
+                <AnimatedStatCard
+                    icon="wallet"
+                    value={`₹${balance.toFixed(0)}`}
+                    label="Available"
+                    color={theme.accent}
+                    delay={100}
+                    theme={theme}
+                />
+                <AnimatedStatCard
+                    icon="bar-chart"
+                    value={`₹${portfolioValue.toFixed(0)}`}
+                    label="Invested"
+                    color={theme.purple}
+                    delay={200}
+                    theme={theme}
+                />
+                <AnimatedStatCard
+                    icon={plPositive ? "trending-up" : "trending-down"}
+                    value={`${plPositive ? "+" : ""}₹${Math.abs(totalPL).toFixed(0)}`}
+                    label="P&L"
+                    color={plPositive ? theme.green : theme.red}
+                    delay={300}
+                    theme={theme}
+                />
             </View>
 
             {/* Quick Actions */}
-            <Text style={s.sectionTitle}>QUICK ACTIONS</Text>
-            <View style={s.actionsRow}>
-                {[
-                    { icon: "add-circle-outline", label: "Add Spend", color: theme.accent, route: "/(tabs)/wallet" },
-                    { icon: "bar-chart-outline", label: "Portfolio", color: theme.purple, route: "/(tabs)/portfolio" },
-                    { icon: "sparkles-outline", label: "AI Picks", color: theme.amber, route: "/(tabs)/ai" },
-                ].map(({ icon, label, color, route: r }) => (
-                    <TouchableOpacity key={label} style={s.actionBtn} onPress={() => router.push(r as any)}>
-                        <View style={[s.actionIcon, { backgroundColor: `${color}20` }]}>
-                            <Ionicons name={icon as any} size={22} color={color} />
-                        </View>
-                        <Text style={s.actionLabel}>{label}</Text>
-                    </TouchableOpacity>
-                ))}
+            <View style={s.section}>
+                <View style={s.sectionHeader}>
+                    <Text style={[s.sectionTitle, { color: theme.text }]}>Quick Actions</Text>
+                    <View style={[s.sectionBadge, { backgroundColor: `${theme.accent}15` }]}>
+                        <Text style={[s.sectionBadgeText, { color: theme.accent }]}>3</Text>
+                    </View>
+                </View>
+                
+                <View style={s.actionsGrid}>
+                    <AnimatedActionButton
+                        icon="add-circle"
+                        label="Log Spend"
+                        color={theme.accent}
+                        route="/(tabs)/wallet"
+                        delay={100}
+                        theme={theme}
+                    />
+                    <AnimatedActionButton
+                        icon="briefcase"
+                        label="Portfolio"
+                        color={theme.purple}
+                        route="/(tabs)/portfolio"
+                        delay={200}
+                        theme={theme}
+                    />
+                    <AnimatedActionButton
+                        icon="sparkles"
+                        label="AI Picks"
+                        color={theme.amber}
+                        route="/(tabs)/ai"
+                        delay={300}
+                        theme={theme}
+                    />
+                </View>
             </View>
 
             {/* Stock Chart Explorer */}
-            <Text style={s.sectionTitle}>EXPLORE STOCK CHARTS</Text>
-            <StockChartExplorer theme={theme} />
-
-            {/* How it works */}
-            <Text style={s.sectionTitle}>HOW SMARTCHANGE WORKS</Text>
-            <View style={s.howCard}>
-                {[
-                    { n: "1", t: "Spend normally", d: "Log any purchase — coffee, groceries, etc." },
-                    { n: "2", t: "Round-up happens", d: "We round up to the next ₹ automatically" },
-                    { n: "3", t: "Spare change invested", d: "AI picks the best stocks for that spare change" },
-                ].map(({ n, t, d }) => (
-                    <View key={n} style={s.howRow}>
-                        <View style={s.howNum}><Text style={s.howNumText}>{n}</Text></View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={s.howTitle}>{t}</Text>
-                            <Text style={s.howDesc}>{d}</Text>
-                        </View>
-                    </View>
-                ))}
+            <View style={s.section}>
+                <View style={s.sectionHeader}>
+                    <Text style={[s.sectionTitle, { color: theme.text }]}>Explore Markets</Text>
+                    <Ionicons name="search" size={18} color={theme.muted} />
+                </View>
+                <StockChartExplorer theme={theme} />
             </View>
+
+            {/* How it Works */}
+            <View style={s.section}>
+                <View style={s.sectionHeader}>
+                    <Text style={[s.sectionTitle, { color: theme.text }]}>How It Works</Text>
+                    <Ionicons name="information-circle" size={18} color={theme.muted} />
+                </View>
+                <View style={[s.howCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
+                    {[
+                        { n: "1", t: "Log Your Spending", d: "Track purchases like coffee, groceries, or shopping", icon: "cart" },
+                        { n: "2", t: "Auto Round-Up", d: "We round to next ₹ + add ₹1 extra automatically", icon: "calculator" },
+                        { n: "3", t: "AI Invests for You", d: "Smart algorithm picks best stocks for your spare change", icon: "sparkles" },
+                    ].map(({ n, t, d, icon }, idx) => (
+                        <View key={n} style={s.howRow}>
+                            <View style={[s.howIconWrap, { backgroundColor: `${theme.accent}15`, borderColor: `${theme.accent}30` }]}>
+                                <Ionicons name={icon as any} size={20} color={theme.accent} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                                    <View style={[s.howNum, { backgroundColor: `${theme.accent}20`, borderColor: `${theme.accent}40` }]}>
+                                        <Text style={[s.howNumText, { color: theme.accent }]}>{n}</Text>
+                                    </View>
+                                    <Text style={[s.howTitle, { color: theme.text }]}>{t}</Text>
+                                </View>
+                                <Text style={[s.howDesc, { color: theme.muted }]}>{d}</Text>
+                            </View>
+                        </View>
+                    ))}
+                </View>
+            </View>
+
+            {/* Footer Spacing */}
+            <View style={{ height: 40 }} />
         </ScrollView>
     );
 }
@@ -499,29 +818,167 @@ function makeStyles(t: ReturnType<typeof import("../../context/ThemeContext").us
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: t.bg },
         center: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: t.bg },
-        header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", padding: 24, paddingTop: 56 },
-        greeting: { color: t.muted, fontSize: 13 },
-        username: { color: t.text, fontSize: 20, fontWeight: "700" },
-        iconBtn: { padding: 8, backgroundColor: t.surface, borderRadius: 10, borderWidth: 1, borderColor: t.border },
-        heroCard: { margin: 20, marginTop: 4, padding: 28, borderRadius: 20, backgroundColor: t.card, borderWidth: 1, borderColor: t.border, alignItems: "center" },
-        heroLabel: { color: t.muted, fontSize: 13, marginBottom: 8 },
-        heroAmount: { color: t.accent, fontSize: 42, fontWeight: "800", letterSpacing: 1 },
-        heroBadge: { flexDirection: "row", alignItems: "center", marginTop: 12, gap: 6 },
-        heroBadgeText: { color: t.muted, fontSize: 11 },
-        statsRow: { flexDirection: "row", paddingHorizontal: 20, marginBottom: 24 },
-        statCard: { backgroundColor: t.card, borderRadius: 16, padding: 18, borderWidth: 1, borderColor: t.border, alignItems: "flex-start" },
-        statValue: { color: t.text, fontSize: 18, fontWeight: "700", marginTop: 8 },
-        statLabel: { color: t.muted, fontSize: 11, marginTop: 2 },
-        sectionTitle: { color: t.subtext, fontSize: 11, fontWeight: "700", letterSpacing: 1, paddingHorizontal: 20, marginBottom: 12 },
-        actionsRow: { flexDirection: "row", paddingHorizontal: 20, gap: 12, marginBottom: 28 },
-        actionBtn: { flex: 1, alignItems: "center" },
-        actionIcon: { width: 52, height: 52, borderRadius: 16, justifyContent: "center", alignItems: "center", marginBottom: 6 },
-        actionLabel: { color: t.subtext, fontSize: 11, fontWeight: "600" },
-        howCard: { margin: 20, marginTop: 0, backgroundColor: t.card, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: t.border, gap: 16, marginBottom: 40 },
+        loadingText: { marginTop: 12, fontSize: 13 },
+        header: { 
+            flexDirection: "row", 
+            justifyContent: "space-between", 
+            alignItems: "center", 
+            padding: 24, 
+            paddingTop: 56 
+        },
+        greeting: { color: t.muted, fontSize: 14, marginBottom: 4 },
+        username: { color: t.text, fontSize: 24, fontWeight: "800", letterSpacing: -0.5 },
+        iconBtn: { 
+            padding: 10, 
+            backgroundColor: t.surface, 
+            borderRadius: 12, 
+            borderWidth: 1, 
+            borderColor: t.border 
+        },
+        
+        // Hero Card
+        heroCard: { 
+            margin: 20, 
+            marginTop: 4, 
+            padding: 24, 
+            borderRadius: 24, 
+            borderWidth: 1,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.1,
+            shadowRadius: 12,
+            elevation: 5,
+        },
+        heroTop: { 
+            flexDirection: "row", 
+            justifyContent: "space-between", 
+            alignItems: "flex-start",
+            marginBottom: 20,
+        },
+        heroLabel: { fontSize: 13, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5 },
+        heroAmount: { fontSize: 48, fontWeight: "900", letterSpacing: -1, marginTop: 4 },
+        heroBadge: { 
+            width: 48, 
+            height: 48, 
+            borderRadius: 14, 
+            justifyContent: "center", 
+            alignItems: "center",
+            borderWidth: 1,
+        },
+        heroStats: {
+            flexDirection: "row",
+            borderRadius: 16,
+            padding: 16,
+            borderWidth: 1,
+        },
+        heroStatItem: { flex: 1, alignItems: "center" },
+        heroStatLabel: { fontSize: 11, marginBottom: 6, fontWeight: "600" },
+        heroStatValue: { fontSize: 16, fontWeight: "700" },
+        heroStatDivider: { width: 1, marginHorizontal: 12 },
+        
+        // Stats Grid
+        statsGrid: { 
+            flexDirection: "row", 
+            paddingHorizontal: 20, 
+            gap: 12, 
+            marginBottom: 32 
+        },
+        statCard: { 
+            flex: 1, 
+            backgroundColor: t.card, 
+            borderRadius: 18, 
+            padding: 16, 
+            borderWidth: 1, 
+            borderColor: t.border,
+            alignItems: "center",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+        },
+        statIconWrap: {
+            width: 44,
+            height: 44,
+            borderRadius: 12,
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 10,
+        },
+        statValue: { fontSize: 18, fontWeight: "800", marginBottom: 4 },
+        statLabel: { fontSize: 11, fontWeight: "600" },
+        
+        // Section
+        section: { paddingHorizontal: 20, marginBottom: 32 },
+        sectionHeader: { 
+            flexDirection: "row", 
+            justifyContent: "space-between", 
+            alignItems: "center", 
+            marginBottom: 16 
+        },
+        sectionTitle: { fontSize: 18, fontWeight: "800", letterSpacing: -0.3 },
+        sectionBadge: { 
+            paddingHorizontal: 10, 
+            paddingVertical: 4, 
+            borderRadius: 12 
+        },
+        sectionBadgeText: { fontSize: 12, fontWeight: "700" },
+        
+        // Actions
+        actionsGrid: { gap: 12 },
+        actionBtn: { 
+            flexDirection: "row", 
+            alignItems: "center", 
+            padding: 18, 
+            borderRadius: 18, 
+            borderWidth: 1,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+        },
+        actionIconWrap: { 
+            width: 48, 
+            height: 48, 
+            borderRadius: 14, 
+            justifyContent: "center", 
+            alignItems: "center", 
+            marginRight: 14 
+        },
+        actionLabel: { flex: 1, fontSize: 15, fontWeight: "700" },
+        
+        // How It Works
+        howCard: { 
+            borderRadius: 20, 
+            padding: 20, 
+            borderWidth: 1, 
+            gap: 20,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+        },
         howRow: { flexDirection: "row", gap: 16, alignItems: "flex-start" },
-        howNum: { width: 28, height: 28, borderRadius: 14, backgroundColor: t.accentDim, justifyContent: "center", alignItems: "center", borderWidth: 1, borderColor: t.accentBorder },
-        howNumText: { color: t.accent, fontSize: 12, fontWeight: "700" },
-        howTitle: { color: t.text, fontSize: 14, fontWeight: "600", marginBottom: 2 },
-        howDesc: { color: t.muted, fontSize: 12 },
+        howIconWrap: { 
+            width: 48, 
+            height: 48, 
+            borderRadius: 14, 
+            justifyContent: "center", 
+            alignItems: "center",
+            borderWidth: 1,
+        },
+        howNum: { 
+            width: 24, 
+            height: 24, 
+            borderRadius: 12, 
+            justifyContent: "center", 
+            alignItems: "center",
+            borderWidth: 1,
+        },
+        howNumText: { fontSize: 11, fontWeight: "800" },
+        howTitle: { fontSize: 15, fontWeight: "700", marginBottom: 4 },
+        howDesc: { fontSize: 13, lineHeight: 19 },
     });
 }
