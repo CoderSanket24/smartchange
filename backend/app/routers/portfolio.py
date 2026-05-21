@@ -82,6 +82,8 @@ def _get_live_price(symbol: str) -> float:
             if math.isnan(price) or math.isinf(price) or price <= 0:
                 fallback = base_price if base_price > 0 else 100.0
                 log.warning(f"Invalid price {price} for {ticker}, using base price: {fallback}")
+                # Cache the fallback price to ensure consistency
+                _PRICE_CACHE[symbol] = (fallback, now)
                 return fallback
             
             price = round(price, 2)
@@ -90,10 +92,10 @@ def _get_live_price(symbol: str) -> float:
     except Exception as exc:
         log.warning(f"yfinance price fetch failed for {ticker}: {exc}")
 
-    # Fallback: use cached value (even stale) or static base
-    if cached:
-        return cached[0]
-    return base_price
+    # Fallback: use base price and cache it
+    fallback = base_price if base_price > 0 else 100.0
+    _PRICE_CACHE[symbol] = (fallback, now)
+    return fallback
 
 
 @router.get("/stocks", tags=["Portfolio"])

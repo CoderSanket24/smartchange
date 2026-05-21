@@ -665,7 +665,7 @@ export default function PortfolioScreen() {
                                         </View>
                                         <View style={{ flex: 1 }}>
                                             <Text style={s.stockName}>{item.name}</Text>
-                                            <Text style={s.stockPrice}>₹{item.price.toFixed(2)}</Text>
+                                            <Text style={s.stockPrice}>₹{(item.price ?? 0).toFixed(2)}</Text>
                                         </View>
                                         <Ionicons name="chevron-forward" size={16} color={theme.muted} />
                                     </TouchableOpacity>
@@ -688,7 +688,7 @@ export default function PortfolioScreen() {
                                 />
                                 {investAmount ? (
                                     <Text style={s.sharesPreview}>
-                                        ≈ {(parseFloat(investAmount) / selectedStock.price).toFixed(6)} fractional shares @ ₹{selectedStock.price}
+                                        ≈ {(parseFloat(investAmount) / (selectedStock.price ?? 1)).toFixed(6)} fractional shares @ ₹{(selectedStock.price ?? 0).toFixed(2)}
                                     </Text>
                                 ) : null}
                                 <TouchableOpacity style={s.modalBtn} onPress={handleInvest} disabled={investing}>
