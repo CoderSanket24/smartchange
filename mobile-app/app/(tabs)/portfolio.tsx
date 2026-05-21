@@ -276,7 +276,7 @@ function StockDetailSheet({
                     <View style={[detailStyles.statsCard, { backgroundColor: theme.card, borderColor: theme.border }]}>
                         <Text style={[detailStyles.cardSectionTitle, { color: theme.subtext }]}>RETURNS BREAKDOWN</Text>
                         <StatRow label="Total P&L"
-                            value={`${isProfit ? "+" : ""}₹{profitLoss.toFixed(2)}`}
+                            value={`${isProfit ? "+" : ""}₹${profitLoss.toFixed(2)}`}
                             valueColor={plColor} />
                         <View style={detailStyles.divider} />
                         <StatRow label="Return %"
